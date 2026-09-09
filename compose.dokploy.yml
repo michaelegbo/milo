@@ -6,6 +6,9 @@ services:
         MILO_BUILD_REVISION: ${MILO_BUILD_REVISION:?Set the source commit SHA}
     image: milo-static:${MILO_BUILD_REVISION:?Set the source commit SHA}
     restart: unless-stopped
+    depends_on:
+      codex:
+        condition: service_healthy
     expose:
       - "8080"
     volumes:
@@ -27,4 +30,34 @@ services:
         max-size: 5m
         max-file: "2"
     # Dokploy Domains: milo.seemplifyai.com -> service milo, port 8080.
-    # No host port and no server-side inference endpoint are exposed.
+    # Only the website is routed publicly. Codex is reachable through /api/codex/.
+  codex:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.codex
+      args:
+        MILO_BUILD_REVISION: ${MILO_BUILD_REVISION:?Set the source commit SHA}
+    image: milo-codex:${MILO_BUILD_REVISION:?Set the source commit SHA}
+    restart: unless-stopped
+    expose:
+      - "8791"
+    volumes:
+      - milo_codex_accounts:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cpus: "1.0"
+    mem_limit: 2g
+    memswap_limit: 2g
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+volumes:
+  milo_codex_accounts:

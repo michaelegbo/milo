@@ -113,94 +113,100 @@ async function send(page: Page, text: string) {
   await expect(page.locator('#conversation-panel')).toHaveAttribute('data-state', 'idle');
 }
 
-async function mockCompanion(page: Page, signedIn = true) {
-  const state = { signedIn, pending: false, requests: [] as { path: string; body: any }[], offline: false };
-  await page.route('http://127.0.0.1:8790/**', async route => {
+async function mockHostedChatGPT(page: Page, signedIn = true) {
+  const state = { signedIn, pending: false, code: 1, requests: [] as { path: string; body: any }[], offline: false };
+  const status = () => ({ connected: true, signedIn: state.signedIn, plan: 'plus', loginPending: state.pending,
+    login: state.pending ? { userCode: 'MILO-CODE' + state.code, verificationUrl: 'https://auth.openai.com/codex/device', expiresAt: Date.now() + 900000 } : null,
+    models: state.signedIn ? [{ id: 'test-model', name: 'Test ChatGPT model', isDefault: true }, { id: 'second-model', name: 'Second ChatGPT model', isDefault: false }] : [] });
+  await page.route('**/api/codex/**', async route => {
     if (state.offline) return route.abort('connectionrefused');
-    const request = route.request(), path = new URL(request.url()).pathname;
-    const headers = { 'access-control-allow-origin': new URL(page.url()).origin, 'access-control-allow-headers': 'Authorization, Content-Type', 'access-control-allow-methods': 'GET, POST', 'access-control-allow-private-network': 'true' };
-    if (request.method() === 'OPTIONS') return route.fulfill({ status: 204, headers });
+    const request = route.request(), path = new URL(request.url()).pathname.replace('/api/codex', '');
     state.requests.push({ path, body: request.postDataJSON() });
-    if (request.headers().authorization !== `Bearer ${'a'.repeat(64)}`) return route.fulfill({ status: 401, headers, json: { message: 'Invalid pairing code.' } });
-    if (path === '/status') return route.fulfill({ headers, json: { connected: true, signedIn: state.signedIn, plan: 'plus', loginPending: state.pending, models: state.signedIn ? [{ id: 'test-model', name: 'Test ChatGPT model', isDefault: true }] : [] } });
-    if (path === '/login') { state.pending = true; return route.fulfill({ headers, json: { authUrl: 'https://auth.openai.com/test-milo-login' } }); }
+    if (path === '/status') return route.fulfill({ json: status() });
+    if (path === '/login') { state.pending = true; state.code++; return route.fulfill({ json: status() }); }
     if (path === '/login/cancel') state.pending = false;
-    if (path === '/logout') state.signedIn = false;
+    if (path === '/logout') { state.signedIn = false; state.pending = false; }
     if (path === '/chat') {
       const input = request.postDataJSON();
-      return route.fulfill({ headers: { ...headers, 'content-type': 'application/x-ndjson' }, body: [{ type: 'routing', profile: input.profile === 'hybrid' ? 'quality' : input.profile, reason: 'Test ChatGPT reasoning.' }, { type: 'delta', text: 'Hello from your ChatGPT account.' }, { type: 'done', text: 'Hello from your ChatGPT account.' }].map(e => JSON.stringify(e)).join('\n') + '\n' });
+      return route.fulfill({ contentType: 'application/x-ndjson', body: [{ type: 'routing', profile: input.profile === 'hybrid' ? 'quality' : input.profile, reason: 'Test ChatGPT reasoning.' }, { type: 'delta', text: 'Hello from your ChatGPT account.' }, { type: 'done', text: 'Hello from your ChatGPT account.' }].map(e => JSON.stringify(e)).join('\n') + '\n' });
     }
-    return route.fulfill({ headers, json: { ok: true } });
+    return route.fulfill({ json: { ok: true } });
   });
   return state;
 }
 
-test('ChatGPT is opt-in, prepares only local audio, preserves context and returns to private local replies', async ({ page }, testInfo) => {
-  const { errors } = await setup(page);
-  const companion = await mockCompanion(page);
+test('ChatGPT is opt-in, selects account models, prepares local audio and preserves context', async ({ page }, testInfo) => {
+  const { errors, requests } = await setup(page);
+  const hosted = await mockHostedChatGPT(page);
   await page.getByRole('tab', { name: 'Conversation' }).click();
-  expect(companion.requests).toEqual([]);
+  expect(hosted.requests).toEqual([]);
   await page.getByLabel('REPLY PROVIDER').selectOption('codex');
-  await expect(page.locator('.device-privacy')).toContainText('go to OpenAI');
+  await expect(page.locator('.device-privacy')).toContainText('go to OpenAI through Milo');
   await expect(page.locator('#device-download-size')).toContainText('172 MB');
-  expect(companion.requests).toEqual([]);
-  await page.getByLabel('Companion pairing code').fill('a'.repeat(64));
-  await page.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(page.locator('#codex-status')).toContainText('ChatGPT connected');
+  await page.getByLabel('CHATGPT MODEL', { exact: true }).selectOption('second-model');
+  await expect(page.getByLabel('CHATGPT MODEL', { exact: true })).toHaveValue('second-model');
   await page.getByRole('button', { name: /Download & start conversation/ }).click();
   await expect(page.locator('#conversation-start')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both']);
   await send(page, 'My name is Amara.');
   await page.getByLabel('MILO’S MIND').selectOption('hybrid');
   await send(page, 'What is my name?');
-  const turns = companion.requests.filter(r => r.path === '/chat');
-  expect(turns[1].body.model).toBe('test-model');
+  const turns = hosted.requests.filter(r => r.path === '/chat');
+  expect(turns[1].body.model).toBe('second-model');
   expect(turns[1].body.memory.facts.join(' ')).toContain('Amara');
   expect(await page.evaluate(() => (window as any).__device.turns)).toEqual([]);
   expect(await page.evaluate(() => (window as any).__device.speech)).toContain('Hello from your ChatGPT account.');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('chatgpt-mobile.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
+  await page.getByRole('button', { name: 'Disconnect ChatGPT', exact: true }).click();
   await expect(page.getByLabel('REPLY PROVIDER')).toHaveValue('device');
+  expect(hosted.signedIn).toBe(false);
   await expect(page.locator('.device-privacy')).toContainText('stay in this browser');
   await expect(page.locator('#conversation-start')).toBeDisabled();
   await page.getByRole('button', { name: /Download & start conversation/ }).click();
   await expect(page.locator('#conversation-start')).toBeEnabled();
   await send(page, 'Hello again');
   expect(await page.evaluate(() => (window as any).__device.turns.length)).toBe(1);
-  expect(companion.requests.filter(r => r.path === '/chat')).toHaveLength(2);
+  expect(hosted.requests.filter(r => r.path === '/chat')).toHaveLength(2);
+  expect(requests.filter(url => new URL(url).port === '8790')).toEqual([]);
   expect(errors).toEqual([]);
 });
 
-test('ChatGPT supports login cancellation, signed-out state, connection failures and safe refresh', async ({ page }, testInfo) => {
-  await setup(page); const companion = await mockCompanion(page, false);
+test('ChatGPT device sign-in supports new codes, cancellation, failures and private refresh', async ({ page }, testInfo) => {
+  const { errors } = await setup(page); const hosted = await mockHostedChatGPT(page, false);
   await page.getByRole('tab', { name: 'Conversation' }).click();
   await page.getByLabel('REPLY PROVIDER').selectOption('codex');
-  await page.getByLabel('Companion pairing code').fill('bad');
-  await page.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(page.locator('#codex-status')).toContainText('64-character');
-  await page.getByLabel('Companion pairing code').fill('a'.repeat(64));
-  await page.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(page.getByRole('button', { name: 'Sign in to ChatGPT' })).toBeVisible();
-  await page.addInitScript(() => { window.open = () => null; });
-  await page.evaluate(() => { window.open = () => null; });
-  await page.getByRole('button', { name: 'Sign in to ChatGPT' }).click();
-  await expect(page.getByRole('link', { name: 'Continue sign-in' })).toHaveAttribute('href', 'https://auth.openai.com/test-milo-login');
+  await expect(page.locator('#codex-status')).toContainText('No installation needed');
+  await expect(page.getByLabel('Companion pairing code')).toHaveCount(0);
+  await page.getByRole('button', { name: /Connect ChatGPT/ }).click();
+  await expect(page.getByRole('link', { name: 'Open OpenAI' })).toHaveAttribute('href', 'https://auth.openai.com/codex/device');
+  await expect(page.locator('#codex-device-code')).toHaveText('MILO-CODE2');
   await page.screenshot({ path: testInfo.outputPath('chatgpt-sign-in-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator('#codex-controls').screenshot({ path: testInfo.outputPath('chatgpt-sign-in-mobile.png') });
+  await page.getByRole('button', { name: 'Get a new code' }).click();
+  await expect(page.locator('#codex-device-code')).toHaveText('MILO-CODE3');
   await page.getByRole('button', { name: 'Cancel sign-in' }).click();
-  await expect(page.getByRole('button', { name: 'Sign in to ChatGPT' })).toBeVisible();
-  companion.signedIn = true;
+  await expect(page.getByRole('button', { name: /Connect ChatGPT/ })).toBeVisible();
+  await expect(page.locator('#codex-device-login')).toBeHidden();
+  hosted.signedIn = true;
   await page.getByRole('button', { name: 'Check connection' }).click();
-  await page.getByRole('button', { name: 'Sign out of ChatGPT' }).click();
+  await expect(page.locator('#codex-status')).toContainText('ChatGPT connected');
+  await page.getByRole('button', { name: 'Disconnect ChatGPT' }).click();
   await expect(page.locator('#conversation-start')).toBeDisabled();
-  companion.offline = true;
-  await page.getByRole('button', { name: 'Check connection' }).click();
-  await expect(page.locator('#codex-status')).toContainText('Cannot reach');
+  hosted.offline = true;
+  await page.getByLabel('REPLY PROVIDER').selectOption('codex');
+  await expect(page.locator('#codex-status')).toContainText('unavailable');
+  const count = hosted.requests.length;
   await page.reload();
   await page.getByRole('tab', { name: 'Conversation' }).click();
   await expect(page.getByLabel('REPLY PROVIDER')).toHaveValue('device');
   await expect(page.locator('#codex-controls')).toBeHidden();
+  expect(hosted.requests).toHaveLength(count);
+  expect(errors).toEqual([]);
 });
 
 test('device landing requests no models or API before consent and plays local speech at desktop and mobile sizes', async ({ page }, testInfo) => {

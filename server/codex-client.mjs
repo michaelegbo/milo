@@ -19,7 +19,7 @@ async function executable(binary) {
   }
 }
 
-// One isolated app-server per local companion. Never reads the host's Codex login.
+// One isolated app-server per account. Never reads the host's Codex login.
 export class CodexClient extends EventEmitter {
   constructor({ binary = process.env.MILO_CODEX_BIN || 'codex', directory, spawnProcess = spawn }) {
     super(); this.binary = binary; this.directory = directory; this.spawnProcess = spawnProcess;
@@ -37,18 +37,21 @@ export class CodexClient extends EventEmitter {
     await mkdir(this.workspace, { recursive: true, mode: 0o700 });
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(PATH|SYSTEMROOT|WINDIR|TEMP|TMP|LANG|LOCALAPPDATA|APPDATA)$/i.test(key)));
     Object.assign(env, { CODEX_HOME: home, HOME: home, USERPROFILE: home });
-    const settings = { cli_auth_credentials_store: 'file', forced_login_method: 'chatgpt', approval_policy: 'never', sandbox_mode: 'read-only',
+    const settings = { cli_auth_credentials_store: 'file', forced_login_method: 'chatgpt', approval_policy: 'never', default_permissions: 'milo-chat',
       web_search: 'disabled', 'history.persistence': 'none', 'otel.log_user_prompt': false,
       'features.shell_tool': false, 'features.unified_exec': false, 'features.apps': false,
       'features.plugins': false, 'features.hooks': false, 'features.memories': false,
       'features.multi_agent': false, 'features.browser_use': false, 'features.computer_use': false,
       'features.image_generation': false, 'features.code_mode': false, 'features.view_image': false,
       'features.skill_search': false, 'features.shell_snapshot': false, 'features.workspace_dependencies': false };
-    const args = ['app-server', ...Object.entries(settings).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`])];
+    const args = ['app-server', ...Object.entries(settings).flatMap(([key, value]) => ['-c', `${key}=${JSON.stringify(value)}`]),
+      '-c', `permissions.milo-chat.filesystem={":root"="deny",":minimal"="read",${JSON.stringify(home)}="deny",":workspace_roots"={"."="read"}}`,
+      '-c', 'permissions.milo-chat.network.enabled=false'];
     const target = await executable(this.binary).catch(() => { throw new Error('Install the Codex CLI or set MILO_CODEX_BIN to its executable, then restart the companion.'); });
     this.child = this.spawnProcess(target.command, [...target.prefix, ...args], { cwd: this.workspace, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    this.child.on('error', () => this.fail(new Error('Codex could not start. Install the Codex CLI or set MILO_CODEX_BIN to its executable, then restart the companion.')));
-    this.child.on('exit', () => this.fail(new Error('The Codex companion stopped. Restart it and reconnect.')));
+    const child = this.child;
+    this.child.on('error', () => { if (this.child === child) this.fail(new Error('Codex is temporarily unavailable. Please reconnect shortly.')); });
+    this.child.on('exit', () => { if (this.child === child) { this.child = undefined; this.fail(new Error('Codex disconnected. Please reconnect.')); } });
     this.child.stderr.on('data', () => {}); // Never log tokens, prompts, or upstream response bodies.
     this.lines = createInterface({ input: this.child.stdout });
     this.lines.on('line', line => {
@@ -66,6 +69,7 @@ export class CodexClient extends EventEmitter {
   }
   send(message) { this.child?.stdin.write(JSON.stringify(message) + '\n'); }
   call(method, params = {}) {
+    if (!this.child) return Promise.reject(new Error('Codex is not running.'));
     return new Promise((resolve, reject) => {
       const id = ++this.sequence;
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('Codex took too long to respond. Retry or restart the companion.')); }, 30_000);
@@ -77,10 +81,21 @@ export class CodexClient extends EventEmitter {
     this.pending.clear(); this.starting = undefined; this.emit('unavailable', error);
   }
   stop() { this.lines?.close(); this.child?.kill(); this.child = undefined; this.fail(new Error('Codex stopped.')); }
+  async shutdown() {
+    if (this.retirement) return this.retirement;
+    const child = this.child;
+    if (!child || child.exitCode != null) { this.stop(); return; }
+    const exited = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Codex did not exit; its credential directory was retained.')), 5000);
+      child.once('exit', () => { clearTimeout(timeout); resolve(); });
+    });
+    this.retirement = exited;
+    this.stop(); await exited;
+  }
 
   async reply({ model, effort, instructions, text, signal, onText }) {
     await this.start(); signal.throwIfAborted();
-    const { thread } = await this.call('thread/start', { model, cwd: this.workspace, approvalPolicy: 'never', sandbox: 'read-only',
+    const { thread } = await this.call('thread/start', { model, cwd: this.workspace, approvalPolicy: 'never', permissions: 'milo-chat',
       ephemeral: true, environments: [], dynamicTools: [], selectedCapabilityRoots: [], baseInstructions: instructions });
     let turnId, output = '', settle, settled = false, interrupted = false;
     const completion = new Promise((resolve, reject) => { settle = error => { if (settled) return; settled = true; error ? reject(error) : resolve(output); }; });

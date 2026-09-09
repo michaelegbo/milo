@@ -1,73 +1,87 @@
-# ChatGPT replies in Milo
+# Connect your ChatGPT account
 
-Milo can use your personal ChatGPT account through the official [Codex app-server](https://learn.chatgpt.com/docs/app-server). This is an optional reply provider. The default remains local Qwen inference, and Milo never changes providers automatically.
+Milo offers **ChatGPT · My account** alongside its default on-device replies.
+The website uses a hosted Codex app-server to start OpenAI device-code sign-in.
+You do not need a local companion, terminal, pairing code, API key or software installation.
+The filename of this guide is retained for existing links to the earlier companion implementation.
 
-## Set up your computer
+## Connect
 
-1. Use a current desktop browser on Windows, macOS or Linux. The companion must run on the same computer as the browser. An iPhone or Android browser cannot run the native Codex app-server directly.
-2. Install Node.js 24 and the [Codex CLI](https://learn.chatgpt.com/docs/cli). The adapter was verified against `codex-cli 0.153.4`. If Codex is already available in your terminal, you can use it. For an npm installation, the official package is `@openai/codex`.
-3. Download or clone Milo and open a terminal in its folder. The companion uses Node built-ins and does not need the native speech/model dependencies. You can run it directly with `node server/codex-bridge.mjs`, or use `npm run codex:bridge`.
-4. Keep that terminal open. It displays a private, randomly generated pairing code. A new companion process gets a new code. Do not post it or share it with other people.
-5. Open [Milo](https://milo.seemplifyai.com), choose **Conversation**, then **ChatGPT · My account** under **Reply provider**.
-6. Paste the pairing code and click **Connect**. If the browser asks to access the local network, allow it for Milo to reach the companion on this computer.
-7. Select **Sign in to ChatGPT**. Complete sign-in on OpenAI's page and return to Milo. If a popup is blocked, use **Continue sign-in**. You can cancel a pending sign-in from Milo.
-8. Choose one of the models your account exposes, then **Download & start conversation** to prepare local voice and listening. Type a message or start the microphone.
+1. Open **Conversation**, then select **ChatGPT · My account** under Reply provider.
+2. Choose **Connect ChatGPT**. Copy the one-time code shown in Milo.
+3. Choose **Open OpenAI** and enter that code on OpenAI's sign-in page. Confirm your own account.
+4. Return to Milo. It checks automatically every three seconds while sign-in is pending.
+5. Select a model available to your account, then prepare Milo's local voice and listening models when prompted.
 
-The account must be eligible to use Codex. A personal ChatGPT login is not a promise of unlimited use or access to every model. The selected model consumes your account's applicable Codex allowance, not a Milo-hosted subscription. Milo does not request an API key.
+Your account needs Codex access. OpenAI may require enabling device-code sign-in in your ChatGPT security settings.
+Codes expire after about 15 minutes. **Get a new code** cancels the old attempt; **Cancel sign-in** stops polling that attempt.
+This flow works through desktop and mobile browsers. Browser memory and cross-origin isolation support still determine whether local voice works on a particular device.
 
-### Locating Codex
+## Models and conversation
 
-The companion finds `codex` on your PATH. On Windows it supports both the desktop app's `codex.exe` and the standard npm `codex.cmd` installation by launching the underlying JavaScript entry point without a shell. If automatic detection fails, set `MILO_CODEX_BIN` to the full path of `codex.exe`, the Unix Codex executable, or the npm package's `bin/codex.js` before starting it. Do not set this to a shell command containing arguments.
+The model menu comes from your signed-in account, not a hard-coded list. Account limits and model availability apply.
+Fast uses lighter supported reasoning effort; Better answers uses deeper effort. Hybrid chooses effort from the message and recent context.
+The model you selected stays selected across modes. Milo sends bounded recent messages and its in-tab memory for each temporary turn.
+Replies stream back and are spoken with local Kokoro. GPU acceleration affects the device Qwen provider; OpenAI manages ChatGPT inference.
+No browser, file, shell, coding or external-action tools are available to the model through this integration.
 
-No GPU toolkit, driver, startup service or system-wide Milo installation is required. Stop the companion with Ctrl+C. It binds only to `127.0.0.1:8790`; do not expose that port through a tunnel or reverse proxy.
+## Privacy and lifetime
 
-## What stays local and what is sent
-
-| Data or operation | Location |
+| Data | Location and lifetime |
 | --- | --- |
-| Avatar rendering | Browser GPU |
-| Recorded microphone audio | Browser; transcribed locally by Whisper |
-| Spoken reply audio | Generated locally by Kokoro on CPU |
-| Typed text, transcribed text, recent messages and session memory | Sent through your local companion to OpenAI while ChatGPT is selected |
-| ChatGPT model inference | OpenAI, using your signed-in account |
-| Local Qwen replies | Your device while the local provider is selected |
-| ChatGPT login credentials | Codex-managed storage under Milo's `.cache/milo-codex/home`; never returned to the browser or Milo's website host |
-| Companion pairing code | Current tab's session storage; cleared by Disconnect |
+| Microphone recordings and speech synthesis | Visitor's device only |
+| Messages, text transcriptions and conversation context | Passed through Milo's service to OpenAI only in ChatGPT mode |
+| Chat history and memory | Current browser tab; not intentionally persisted by the adapter |
+| Browser connection cookie | HttpOnly, Secure, SameSite=Strict; expires 24 hours after connection creation |
+| ChatGPT credentials | Separate protected directory for each browser connection on Milo's host |
+| Downloaded local models | Browser caches and origin-private storage; managed by Delete downloaded models |
 
-Milo's VPS still serves static assets only. It does not receive conversation uploads or hold visitors' ChatGPT credentials. OpenAI's account terms and data controls apply to text sent to it. Temporary app-server threads are used; this does not assert that OpenAI retains no service data.
+**Disconnect ChatGPT** stops that session's Codex process, deletes its stored credential directory, clears the connection cookie and returns to local replies. This does not sign out your other OpenAI apps or other visitors.
+Credentials otherwise expire with the connection after 24 hours. Cleanup runs every minute while the service is running and again at startup.
+Reload defaults to on-device replies. Choose ChatGPT again to resume an unexpired connection. Closing a tab does not disconnect its account.
+Clearing site cookies prevents reconnecting but does not immediately remove server credentials: use Disconnect first, or wait for expiry.
+Switching to on-device replies preserves the optional connection until Disconnect or expiry; deleting local models does not disconnect ChatGPT.
+Use OpenAI's own account controls if you also need to revoke authorization with OpenAI.
 
-The adapter uses a separate `CODEX_HOME` and a blank workspace. Signing out here does not sign out the Codex desktop app or CLI using its ordinary home. Milo supplies conversation context afresh for each temporary turn, including its existing bounded memory. New chat clears that browser conversation. No prompt, token or upstream response-body logging is added by the companion.
+The adapter does not log prompts, tokens or upstream response bodies. OpenAI handles submitted text according to your account and its terms.
+Milo's server operator necessarily administers the hosted credential storage. This is not an entirely on-device ChatGPT integration.
+There is no automatic cloud fallback: on-device conversations remain on-device until you explicitly choose ChatGPT.
 
-## Modes and switching
+## Self-hosting and local development
 
-- **Fast:** chooses a lighter thinking effort supported by the selected Codex model.
-- **Better answers:** chooses a deeper supported effort.
-- **Hybrid:** Milo's deterministic router chooses lighter/deeper effort for the current message and context.
+Production uses `compose.dokploy.yml`: Nginx serves the app and model files, with only `/api/codex/` forwarded to the private `codex` service.
+`deploy/Dockerfile.codex` installs pinned Codex CLI 0.153.4 and runs Node as a non-root user. Its named volume stores the per-session homes.
+Only Nginx is routed publicly. Do not expose port 8791 or mount an administrator's Codex home into the service.
+Set `MILO_PUBLIC_ORIGIN` to your exact HTTPS origin if changing the domain. Build and deploy the frontend and service together.
 
-All three use the model you selected. Availability comes from `model/list`, not a hardcoded catalogue. If a model disappears, reconnect and select another one. GPU settings affect local Qwen models only. Selecting a different provider stops the active turn; in the browser edition it also releases loaded local workers. Prepare audio again when prompted. Chat history stays in the current tab and is supplied to whichever provider you explicitly select.
+For development, install Node 24 and Codex CLI, run `npm run dev:codex`, then start the device frontend on port 5175.
+Vite proxies `/api/codex/` to loopback port 8791. The default development origin is `http://127.0.0.1:5175`.
+Set `MILO_CODEX_BIN` to an executable or Codex package `bin/codex.js` when automatic discovery is unavailable.
+`MILO_CODEX_DATA` chooses the private data directory; it must not be a public asset directory or included in Git.
 
-**Disconnect** ends Milo's connection and returns to local replies; it does not revoke the companion's stored ChatGPT sign-in. **Sign out of ChatGPT** clears the companion's login through the official account/logout method. Reload defaults to local replies; the tab can use **Check connection** to reconnect after selecting ChatGPT again. Closing the browser tab discards its pairing credential. Browser session restoration may restore session storage, so use Disconnect to explicitly forget pairing.
+The service admits four resident Codex processes and up to 128 persisted browser connections, with a global limit of 12 login requests per minute.
+Idle workers may be evicted and reconstructed from the same connection's credentials. Expired connections cannot authenticate requests.
+These conservative limits are for the current host, not a claim of unlimited multi-user capacity.
 
-Deleting downloaded models removes local model caches, not the companion's authentication. Sign out separately before removing a local Milo checkout or sharing its files. `.cache/` is excluded from Git and the Docker build.
+The API accepts only status, device login/cancel, logout, reply and summary. Mutations require the exact Origin and JSON.
+Browser session tokens are cryptographically random; only their hashes name server directories. No generic Codex RPC is exposed.
+Each child has an allowlisted environment, isolated CODEX_HOME and empty workspace. A named permission profile denies root and credential access,
+with environment tools disabled and only ephemeral threads. Disconnect waits for process exit before deleting its directory.
 
-## Recovery
+## Troubleshooting
 
-- **Cannot reach companion:** keep the terminal running, check that port 8790 is free and re-copy its current pairing code. Allow local-network access when the browser prompts. Some browsers or organizational policies block HTTPS pages from reaching localhost; use a current compatible desktop browser. Do not disable browser security protections.
-- **Sign-in does not finish:** use Continue sign-in, or Cancel sign-in and try again. OpenAI hosts authentication and Codex handles its localhost callback. Another login flow can occupy the callback port.
-- **No models / rejected reply:** check ChatGPT/Codex eligibility, model access and account usage. Milo will not spend an API key or silently switch accounts.
-- **Already replying in another tab:** one companion admits one generation at a time. Stop the other turn before retrying.
-- **Voice unavailable:** prepare local models and check browser support, storage and memory. ChatGPT mode removes the Qwen memory requirement but still requires local voice processing.
+- **No code or connection unavailable:** retry after a short wait. The hosted service may be restarting or at capacity.
+- **OpenAI refuses device sign-in:** check ChatGPT security settings and account Codex access. Authenticate only on the OpenAI page linked by Milo.
+- **Code expired:** choose Get a new code, then use only the new code.
+- **No models or allowance exhausted:** check the account's Codex access and usage limits. Milo cannot grant access or reset limits.
+- **Already replying in another tab:** stop that reply before starting another turn on the same connection.
+- **Voice unavailable on a phone:** sign-in itself does not require native software; voice downloads and browser inference still need sufficient device resources.
 
-## Implementation and verification
+## Validation
 
-`server/codex-client.mjs` implements stdio JSON-RPC initialization, account methods, temporary threads, streaming final messages, turn interruption and cleanup. `server/codex-bridge.mjs` exposes only status, login/cancel, logout, reply and summary operations. It validates exact allowed origins, the literal loopback Host, a random bearer pairing code, message sizes and discovered model IDs. It rejects generic RPC and tool requests. The child uses an environment allowlist, read-only sandbox, disabled environment access, disabled shell/browser/app/plugin features and no dynamic tools. Milo is a conversational interface, not a coding-agent tool console.
+`node --test server/*.test.mjs` covers session isolation, cookie and Origin boundaries, restart persistence, expiry, admission limits,
+stream cancellation, model validation and app-server protocol handling. Device UI tests cover consent, sign-in code lifecycle,
+account model selection, local speech, context continuity, disconnect and safe refresh using mocked inference.
+Real device-code creation is checked separately against OpenAI. A completed user sign-in and real account-backed reply require that user's authorization on OpenAI's page.
 
-The hosted Content Security Policy allows only the same origin plus the fixed loopback companion endpoint for connections. The default local-provider journey makes no companion requests. Audio is never sent to the companion.
-
-Run the backend contract tests with:
-
-```sh
-node --test server/codex-bridge.test.mjs
-```
-
-Browser provider tests are part of `tests/device-ui.spec.ts` against the dedicated device-mode Vite server. They mock inference/auth while testing real controls, context, transport and speech playback. A real app-server smoke test verified initialization, official login URL creation/cancellation, and temporary read-only thread creation. A completed personal-account login and real account-backed reply still require the user's interactive OpenAI sign-in; mock tests must not be presented as proof of that account-specific step.
+Protocol reference: [OpenAI app-server documentation](https://learn.chatgpt.com/docs/app-server).

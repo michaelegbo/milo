@@ -1,6 +1,6 @@
 # Milo — a voice companion in 3D
 
-Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **On-device processing is the default.** Its cloud service delivers the website and downloadable model files; it has no inference server. An optional **ChatGPT · My account** provider uses your own locally running Codex companion for replies. Voice recordings and speech processing remain on your device; messages and conversation context go to OpenAI only when you select that provider. There is no automatic switch to a cloud provider.
+Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **On-device processing is the default.** Its cloud service delivers the website and downloadable model files. An optional **ChatGPT · My account** provider connects through Milo's hosted Codex app-server using OpenAI's device-code sign-in. Voice recordings and speech processing remain on your device; messages and conversation context pass through Milo to OpenAI only when you select that provider. There is no automatic switch to a cloud provider.
 
 **Website:** [milo.seemplifyai.com](https://milo.seemplifyai.com) · **Source:** [michaelegbo/milo](https://github.com/michaelegbo/milo) · **License:** [PolyForm Noncommercial 1.0.0](LICENSE)
 
@@ -32,19 +32,15 @@ The mouth shapes approximate audio energy and frequency bands; they are not phon
 
 ## Use your ChatGPT account
 
-Open **Conversation → Reply provider → ChatGPT · My account**. Start the small companion on your Windows, macOS or Linux computer, connect using its private pairing code, and select **Sign in to ChatGPT**. Sign-in opens OpenAI's own page. Milo never asks for your ChatGPT password or copies the Codex desktop app's login.
+Open **Conversation → Reply provider → ChatGPT · My account → Connect ChatGPT**. Copy the one-time code, choose **Open OpenAI**, and complete sign-in on OpenAI's page. Milo automatically checks for completion. No terminal, pairing code or software installation is needed on your computer or phone. Milo never asks for your ChatGPT password or copies the Codex desktop app's login.
 
-```sh
-npm run codex:bridge
-```
-
-Requires Node.js 24 and the Codex CLI (tested with 0.153.4). The companion is a foreground process, bound to `127.0.0.1:8790`; it is not installed as a service. Keep its terminal open while chatting. Your ChatGPT account must have access to Codex; model availability and usage limits come from your account. No API key is required for this provider.
+Your ChatGPT account must have access to Codex; model availability and usage limits come from your account. OpenAI may ask you to enable device-code sign-in in ChatGPT security settings. No API key is required. The hosted service uses Codex CLI 0.153.4 with a separate credential directory for every browser session.
 
 Choose a model returned by Codex. **Fast**, **Better answers** and **Hybrid** select lighter, deeper or automatically routed thinking effort on that chosen model. They do not secretly switch to another model. GPU acceleration applies to the local Qwen provider, not to OpenAI's servers. ChatGPT mode needs about **172 MB** of voice/listening downloads, with no local Qwen download.
 
-**Disconnect** returns to local replies and forgets this tab's pairing code. **Sign out of ChatGPT** signs out Milo's companion only. Reload starts with the private local provider again. Direct mobile-browser ChatGPT sign-in is not supported: the Codex companion must run on the same desktop as the browser. Browser local-network permissions can affect connectivity.
+**Disconnect ChatGPT** stops your Milo connection, deletes its stored server credentials and returns to local replies. Reload starts with the private local provider again; select ChatGPT to resume a connection within its 24-hour lifetime. Sign-in works through desktop and mobile browsers, though on-device voice still depends on browser capability and memory.
 
-See the [complete companion setup, privacy, troubleshooting and test guide](docs/chatgpt-companion.md).
+See the [ChatGPT sign-in, privacy, troubleshooting and developer guide](docs/chatgpt-companion.md).
 
 ## Models and downloads
 
@@ -94,7 +90,9 @@ Use HTTPS (or loopback for development). The hosted build requires cross-origin 
 
 ## Privacy and storage
 
-In the hosted build, microphone audio, typed messages, generated replies, memory and voice synthesis remain in browser workers and the page. The production container contains Nginx and static assets only. `/api/` is unavailable, and HTTP methods other than GET/HEAD are rejected. Its Content Security Policy restricts connections to the website's own origin.
+With the default on-device provider, microphone audio, typed messages, replies, memory and voice synthesis remain in browser workers and the page. Selecting ChatGPT explicitly sends text and context through the same-origin `/api/codex/` service to OpenAI; audio stays on your device. All other inference API routes remain unavailable. The Content Security Policy restricts connections to the website's own origin.
+
+ChatGPT connections use an HttpOnly, Secure, SameSite=Strict cookie. Each connection has separate server credentials, with no shared host account. They persist across refresh and server restart until Disconnect or the 24-hour expiry; cleanup runs every minute and at startup. Clearing browser cookies loses access to that session but does not instantly delete its server credentials: use Disconnect first. Deleting model downloads is separate. The adapter does not log prompts, tokens or upstream response bodies. OpenAI's handling of text is governed by your account and its terms.
 
 The website and model downloads still contact the hosting/CDN infrastructure, which can see ordinary request metadata such as IP addresses and requested file paths. That is distinct from uploading conversation contents. No analytics or account registration is required by Milo.
 
@@ -121,6 +119,9 @@ flowchart LR
     Cache --> Qwen
     Cache --> Kokoro
   end
+  UI -->|Only when ChatGPT selected: text and context| Codex[Hosted Codex: isolated browser session]
+  Codex --> OpenAI[OpenAI: your ChatGPT account]
+  OpenAI -->|Streamed reply| UI
 ```
 
 | Source | Responsibility |
@@ -135,8 +136,9 @@ flowchart LR
 | `src/device/chat-client.ts`, `chat-worker.ts` | wllama inference, device selection, streaming and disposal |
 | `src/device/chat-policy.ts`, `chat-models.ts` | Hybrid routing and browser model locations |
 | `src/device/panel.ts`, `transport.ts` | Explicit device preparation and local request routing |
-| `Dockerfile`, `compose.dokploy.yml`, `deploy/nginx.conf` | Static production hosting and response headers |
-| `server/` | Optional local Node application, excluded from the production runtime |
+| `Dockerfile`, `compose.dokploy.yml`, `deploy/nginx.conf` | Static hosting, response headers and narrow ChatGPT proxy |
+| `server/codex-hosted.mjs`, `codex-client.mjs`, `deploy/Dockerfile.codex` | Isolated hosted ChatGPT sessions and app-server lifecycle |
+| Other `server/` modules | Optional local Node inference application; not run on the public host |
 
 ## Development and hosting
 
@@ -162,7 +164,7 @@ npm run preview
 
 On a POSIX shell, set those variables with `export` first. The required static model directory must be prepared and served at `/models/`. Do not copy multi-gigabyte weights into Git. Vite adds isolation headers and disables the inference proxy when the device-only flag is set; production Nginx enforces the same boundary.
 
-The [hosting guide](docs/hosting.md) covers pinned Docker images, model provisioning and hashes, genuine GGUF shards, Dokploy domain configuration, health checks, verification and rollback. Production runs a non-root, read-only static container with a read-only model mount. It requires no GPU or model inference package on the cloud host.
+The [hosting guide](docs/hosting.md) covers pinned Docker images, model provisioning and hashes, genuine GGUF shards, Dokploy domain configuration, health checks, verification and rollback. Production runs a non-root static container with a read-only model mount and a separate non-root Codex service for optional ChatGPT connections. The host does not run Qwen, Whisper or Kokoro inference and requires no GPU.
 
 | Command | Purpose |
 | --- | --- |

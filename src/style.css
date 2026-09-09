@@ -45,10 +45,12 @@ dialog{color:var(--ink);width:460px;max-width:calc(100vw - 36px);max-height:calc
 .codex-controls details { margin: 10px 0; }
 .codex-controls summary { cursor: pointer; }
 .codex-controls code { overflow-wrap: anywhere; }
-.codex-pair-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
-.codex-pair-row input { min-width: 0; width: 100%; border: 1px solid #d8d8cf; border-radius: 6px; padding: 10px; background: transparent; color: inherit; font: inherit; }
+.codex-code-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 15px; margin: 12px 0; background: #f0f3e9; border: 1px solid #dce2d2; border-radius: 8px; }
+#codex-device-code { font-family: monospace; font-size: 24px; letter-spacing: 2px; color: #4f6042; user-select: all; }
+.codex-controls .primary-button { flex: 0 1 auto; display: inline-flex; align-items: center; justify-content: center; padding: 12px 18px; min-height: 44px; font-size: 12px; text-decoration: none; color: #fff; }
+.codex-code-help { font-size: 11px; color: #79866d; }
 .codex-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 10px 0; }
-.codex-controls button { min-height: 36px; }
+.codex-controls button { min-height: 44px; }
 .codex-controls select { max-width: 100%; }
 .codex-controls [hidden] { display: none; }
 #codex-status { overflow-wrap: anywhere; color: #6a665b; }

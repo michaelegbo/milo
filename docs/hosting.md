@@ -2,8 +2,9 @@
 
 The public deployment serves static files through Nginx. Three.js rendering,
 Kokoro speech, Whisper transcription, and Qwen replies run on the visitor's device
-in browser workers. The production image contains no Node server or inference
-service. It accepts only `GET` and `HEAD`; `/api/` returns `404`.
+in browser workers by default. A separate hosted Codex service supports optional
+ChatGPT account connections. Only `/api/codex/` is proxied; other `/api/` routes
+return `404`. Audio is never uploaded.
 
 Opening the page loads the application and avatar. AI model downloads start only
 after the visitor chooses **Download & start**. The production build downloads
@@ -11,6 +12,16 @@ models, voice vectors, and WebAssembly from the same site. Download requests do
 not include chat text or microphone recordings. A reverse proxy or hosting provider
 can still receive ordinary request metadata such as IP addresses and asset URLs.
 There is no server inference fallback when a browser cannot run a model.
+
+## Hosted ChatGPT service
+
+The Compose file also builds `deploy/Dockerfile.codex`, pinned to Codex CLI 0.153.4.
+This non-root service has one CPU, 2 GiB RAM and 256 processes as limits, with a read-only root and private writable account volume.
+It exposes port 8791 only to the Compose network. Keep it off the public Dokploy domain list.
+Set `MILO_PUBLIC_ORIGIN` to the exact website origin when self-hosting on another domain.
+Nginx starts after its health check passes; both images carry the same source revision.
+Read the [ChatGPT guide](chatgpt-companion.md) for credentials, expiry, disconnect and admission limits.
+Do not copy the private account volume into public build artifacts or model directories.
 
 ## Container and domain
 

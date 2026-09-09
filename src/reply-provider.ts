@@ -1,10 +1,8 @@
 export type ReplyProvider = 'device' | 'codex';
-type Status = { connected: boolean; signedIn: boolean; plan?: string; loginPending?: boolean; loginError?: string; models: { id: string; name: string; isDefault: boolean }[] };
-const endpoint = 'http://127.0.0.1:8790';
-let provider: ReplyProvider = 'device';
-let token = '', model = '', status: Status | undefined;
-let epoch = 0;
-try { token = sessionStorage.getItem('milo-companion-pairing') || ''; } catch { /* Pairing can remain in memory. */ }
+export type CodexStatus = { connected: boolean; signedIn: boolean; plan?: string; loginPending?: boolean; loginError?: string; login?: { verificationUrl: string; userCode: string; expiresAt: number } | null; models: { id: string; name: string; isDefault: boolean }[] };
+let provider: ReplyProvider = 'device', model = '', status: CodexStatus | undefined, epoch = 0;
+// Remove credentials from the superseded local-companion implementation.
+try { sessionStorage.removeItem('milo-companion-pairing'); } catch { /* Optional storage. */ }
 export const usesCodex = () => provider === 'codex';
 export const codexStatus = () => status;
 export const codexModel = () => model;
@@ -14,47 +12,38 @@ export function selectReplyProvider(value: ReplyProvider) {
   window.dispatchEvent(new Event('milo-provider-change'));
   window.dispatchEvent(new Event('milo-device-change'));
 }
-export function pairCompanion(value: string) {
-  if (!/^[a-f0-9]{64}$/i.test(value.trim())) throw new Error('Paste the 64-character pairing code shown by the Milo companion.');
-  token = value.trim(); epoch++; status = undefined;
-  try { sessionStorage.setItem('milo-companion-pairing', token); } catch { /* In-memory pairing still works. */ }
+export function updateCodexStatus(value: CodexStatus) {
+  status = value;
+  if (!value.models.some(m => m.id === model)) model = value.models.find(m => m.isDefault)?.id ?? value.models[0]?.id ?? '';
+  window.dispatchEvent(new Event('milo-device-change'));
 }
-export function disconnectCompanion() {
-  token = ''; status = undefined; model = ''; epoch++;
-  try { sessionStorage.removeItem('milo-companion-pairing'); } catch { /* Nothing persisted. */ }
-  selectReplyProvider('device');
-}
-export async function companionRequest(route: string, body?: unknown, signal?: AbortSignal) {
-  if (!token) throw new Error('Start the Milo companion and paste its pairing code first.');
-  const response = await fetch(endpoint + route, { method: body === undefined ? 'GET' : 'POST', mode: 'cors', credentials: 'omit', redirect: 'error',
-    headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }), signal: signal ?? AbortSignal.timeout(35_000) }).catch(error => {
+export function disconnectCodex() { status = undefined; model = ''; selectReplyProvider('device'); }
+export async function codexRequest(route: string, body?: unknown, signal?: AbortSignal) {
+  const response = await fetch('/api/codex' + route, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', redirect: 'error',
+    ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+    signal: signal ?? AbortSignal.timeout(35_000) }).catch(error => {
       if (signal?.aborted) throw error;
-      throw new Error('Cannot reach your Milo companion. Start it on this computer, allow local-network access if prompted, then reconnect.');
+      throw new Error('ChatGPT connection is unavailable. Check your connection and try again.');
     });
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
-    throw new Error(result.message || 'The companion could not complete that request.');
+    if (response.status === 401) { status = undefined; window.dispatchEvent(new Event('milo-device-change')); }
+    throw new Error(result.message || 'ChatGPT could not complete that request. Please retry.');
   }
   return response;
 }
 export async function refreshCodex() {
   const current = epoch;
-  try {
-    const result: Status = await (await companionRequest('/status')).json();
-    if (current !== epoch) return;
-    status = result;
-    if (!result.models.some(m => m.id === model)) model = result.models.find(m => m.isDefault)?.id ?? result.models[0]?.id ?? '';
-  } catch (error) { if (current === epoch) status = undefined; throw error; }
-  finally { if (current === epoch) window.dispatchEvent(new Event('milo-device-change')); }
+  try { const result = await (await codexRequest('/status')).json(); if (current === epoch) updateCodexStatus(result); }
+  catch (error) { if (current === epoch) { status = undefined; window.dispatchEvent(new Event('milo-device-change')); } throw error; }
 }
 export function codexHealth(profile: string) {
   return { status: status?.signedIn && model ? 'ready' : 'unloaded', profile, progress: 0,
-    message: status?.signedIn ? 'Replies use your ChatGPT account. Voice stays on your device.' : 'Connect the companion and sign in to ChatGPT.',
+    message: status?.signedIn ? 'Replies use your ChatGPT account. Voice stays on your device.' : 'Connect to ChatGPT to enable replies.',
     acceleration: { available: false, enabled: false, status: 'unavailable', backend: null, deviceName: null, revision: 0, message: 'ChatGPT replies run at OpenAI. Your GPU setting applies to local replies.' } };
 }
 export async function codexReply(path: string, init: RequestInit = {}) {
-  if (!usesCodex() || !status?.signedIn || !model) throw new Error('Connect the Milo companion and sign in to ChatGPT first.');
+  if (!usesCodex() || !status?.signedIn || !model) throw new Error('Connect to ChatGPT first.');
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : {};
-  return companionRequest(path.endsWith('/summary') ? '/summary' : '/chat', { ...body, model }, init.signal ?? undefined);
+  return codexRequest(path.endsWith('/summary') ? '/summary' : '/chat', { ...body, model }, init.signal ?? undefined);
 }

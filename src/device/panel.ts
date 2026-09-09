@@ -34,7 +34,7 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
       el('device-setup-description').textContent = 'Prepare Milo’s voice and listening here. Your ChatGPT account provides the replies.';
       el('device-download-size').textContent = 'About 172 MB total · no local reply model needed';
     }
-    container.querySelector('.device-privacy')!.textContent = usesCodex() ? 'Voice recordings stay on your device. Messages and conversation context go to OpenAI for ChatGPT replies.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
+    container.querySelector('.device-privacy')!.textContent = usesCodex() ? 'Voice recordings stay on your device. Messages and conversation context go to OpenAI through Milo for ChatGPT replies.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
     const start = el<HTMLButtonElement>('device-start');
     start.textContent = preparing || loading ? 'Preparing on your device…' : ready ? 'Ready on this device ✓' : error || failed ? 'Try loading again ↘' : conversation ? 'Download & start conversation ↘' : 'Download & start voice ↘';
     start.disabled = deleting || !supported || !!preparing || !!loading || ready;

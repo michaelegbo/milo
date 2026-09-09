@@ -1,0 +1,17 @@
+FROM node:24.20.0-bookworm-slim@sha256:6642ef280aebc09c4541bee0b15c9f89f0f3f3c247ddee79ae1d37eddfdcbbaa
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --prefix /opt/codex --omit=dev --no-audit --no-fund @openai/codex@0.153.4 \
+    && mkdir -p /data && chown node:node /data
+COPY --chown=node:node server/codex-*.mjs server/chat-router.mjs ./server/
+ARG MILO_BUILD_REVISION=unknown
+LABEL org.opencontainers.image.revision="${MILO_BUILD_REVISION}"
+ENV NODE_ENV=production MILO_CODEX_HOST=0.0.0.0 MILO_CODEX_DATA=/data \
+    MILO_CODEX_BIN=/opt/codex/node_modules/@openai/codex/bin/codex.js \
+    MILO_PUBLIC_ORIGIN=https://milo.seemplifyai.com
+USER node
+EXPOSE 8791
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:8791/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "server/codex-hosted.mjs"]

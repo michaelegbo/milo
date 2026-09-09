@@ -125,7 +125,7 @@ export function createConversation(options: {
     ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'unloaded' ? 'not loaded' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
     el('conversation-engines').title = 'All inference stays on this computer. Conversation replies can use the GPU; listening and speech use CPU. Models are cached for later use.';
     if (isDeviceOnly) el('conversation-engines').title = 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. Choose Download & start above to prepare them. No server fallback.';
-    if (remote) el('conversation-engines').title = 'Voice and listening stay on this device. Messages and conversation context are sent to OpenAI through your personal companion.';
+    if (remote) el('conversation-engines').title = 'Voice and listening stay on this device. Messages and conversation context are sent to OpenAI through Milo’s hosted connection.';
     const emptyNote = container.querySelector<HTMLElement>('.conversation-empty > span:last-child');
     if (emptyNote) emptyNote.textContent = remote ? 'ChatGPT receives this conversation’s text.' : 'Your conversation stays in this tab.';
     el('conversation-retry').hidden = !healthError && !Object.values(health ?? {}).some(engine => engine.status === 'error');

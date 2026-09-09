@@ -106,7 +106,7 @@ test('stdio adapter isolates credentials, disables tools, denies RPC requests an
   assert.equal(launch[2].env.CODEX_HOME, path.join(directory, 'home')); assert.equal(launch[2].env.OPENAI_API_KEY, undefined);
   assert.ok(launch[1].includes('features.shell_tool=false'));
   const thread = calls.find(c => c.method === 'thread/start').params;
-  assert.equal(thread.ephemeral, true); assert.equal(thread.sandbox, 'read-only'); assert.deepEqual(thread.environments, []);
+  assert.equal(thread.ephemeral, true); assert.equal(thread.permissions, 'milo-chat'); assert.deepEqual(thread.environments, []);
   child.stdout.write(JSON.stringify({ id: 99, method: 'item/commandExecution/requestApproval', params: {} }) + '\n');
   await new Promise(resolve => setTimeout(resolve, 5)); assert.equal(calls.at(-1).error.code, -32601);
 });

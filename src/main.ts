@@ -112,7 +112,7 @@ const devicePanel = isDeviceOnly ? createDevicePanel(el('device-setup'), () => {
 if (isDeviceOnly) {
   document.body.dataset.deployment = 'device';
   const note = document.querySelector<HTMLElement>('.about-note')!;
-  note.textContent = 'Milo starts with on-device replies. Models download only after you choose Download & start. Voice and listening run on your CPU; compatible browsers can accelerate local replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through your personal desktop companion, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Providers never switch automatically.';
+  note.textContent = 'Milo starts with on-device replies. Models download only after you choose Download & start. Voice and listening run on your CPU; compatible browsers can accelerate local replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through Milo’s hosted connection, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Providers never switch automatically.';
   el('retry').textContent = 'Open model setup';
 }
 

@@ -9,7 +9,7 @@ ARG MILO_BUILD_REVISION=unknown
 ENV VITE_MILO_DEVICE_ONLY=1 VITE_AUDIO_MODEL_BASE=/models/
 RUN node scripts/prepare-browser-assets.mjs \
     && npm run build \
-    && node -e "require('fs').writeFileSync('dist/release.json', JSON.stringify({revision:process.argv[1],processing:'device-default',replyProviders:['device','personal-codex-companion']}))" "$MILO_BUILD_REVISION"
+    && node -e "require('fs').writeFileSync('dist/release.json', JSON.stringify({revision:process.argv[1],processing:'device-default',replyProviders:['device','personal-chatgpt']}))" "$MILO_BUILD_REVISION"
 
 # Production contains only static files. No Node or server inference engine.
 FROM nginx:1.30.4-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
