@@ -5,6 +5,7 @@ import compatWorkerCode from '@wllama/wllama-compat/wasm/wllama.js?raw';
 import { DEVICE_CHAT_MODELS } from './chat-models';
 import { CHAT_PROMPT, SUMMARY_PROMPT, chatInputs, routeDeviceChat, type ChatMode, type ChatProfile } from './chat-policy';
 import { createReplyStream } from './chat-reply-stream';
+import { reopenOrDownload } from './chat-cache';
 import type { ChatMessage, ConversationMemory } from '../conversation-memory';
 
 type Request = { id: number; type: 'initialize' | 'reply' | 'summary'; profile: ChatMode; targetProfile?: ChatProfile; device: 'cpu' | 'gpu'; messages?: ChatMessage[]; memory?: ConversationMemory; baseUrl: string };
@@ -34,20 +35,17 @@ async function prepare(profile: ChatProfile, request: Request) {
   runtime = instance;
   instance.setCompat({ wasm: new URL(compatWasmUrl, request.baseUrl).href, worker: { code: compatWorkerCode } }, 'firefox_safari');
   const load = async () => {
-    const cached = (await instance.modelManager.getModels()).some(value => value.url === modelUrl && value.size > 0);
-    if (!cached && navigator.storage?.estimate) {
-      const estimate = await navigator.storage.estimate();
-      if (estimate.quota && estimate.quota - (estimate.usage ?? 0) < definition.bytes * 1.05) throw new Error(`There is not enough browser storage for ${definition.label}. Free some browser storage, or use Fast.`);
-    }
-    await instance.loadModelFromUrl(modelUrl, {
+    const model = await reopenOrDownload(instance.modelManager, modelUrl, {
+      progressCallback: ({ loaded, total }) => post({ type: 'health', value: {
+        status: 'loading', selectedModel: profile, progress: total ? Math.min(94, Math.round(loaded / total * 94)) : 0,
+        message: loaded < total ? `Saving missing files for ${definition.label}…` : `Loading saved ${definition.label} into memory…`,
+      } }),
+    }, definition.bytes);
+    await instance.loadModel(await model.open(), {
       n_gpu_layers: gpu ? 99999 : 0, n_ctx: 4096, n_parallel: 1, kv_unified: true,
       n_threads: Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))),
       n_batch: 128, n_ubatch: 64, warmup: false, log_level: gpu ? LogLevel.INFO : LogLevel.ERROR,
       reasoning: false, reasoning_budget_tokens: 0, default_template_kwargs: { enable_thinking: false },
-      progressCallback: ({ loaded, total }) => post({ type: 'health', value: {
-        status: 'loading', selectedModel: profile, progress: total ? Math.min(94, Math.round(loaded / total * 94)) : 0,
-        message: loaded < total ? `Downloading ${definition.label} to this browser…` : `Loading ${definition.label} into this device’s memory…`,
-      } }),
     });
   };
   // Serialize writes to the shared origin cache; each tab still has its own model

@@ -1,5 +1,6 @@
 import { env, pipeline, Tensor, RawAudio, type AutomaticSpeechRecognitionPipeline, type ProgressCallback } from '@huggingface/transformers';
 import { KokoroTTS } from 'kokoro-js';
+import { AUDIO_FILES, audioFileUrl } from './saved-downloads';
 import type { AudioHealth, AudioKind, SpeechRequest } from './audio-client';
 
 type Request = { id: number; type: 'initialize' | 'generate' | 'transcribe'; kind: AudioKind; request?: SpeechRequest; wav?: ArrayBuffer };
@@ -13,6 +14,7 @@ let stt: AutomaticSpeechRecognitionPipeline | undefined;
 let busy = false;
 let ready = false;
 let kind: AudioKind;
+const savedFiles = new Set<string>();
 const audioCache = new Map<string, { wav: ArrayBuffer; duration: number }>();
 let cacheBytes = 0;
 
@@ -39,13 +41,20 @@ function progressFor(label: string, expectedBytes: number): ProgressCallback {
       const loaded = [...files.values()].reduce((sum, file) => sum + file.loaded, 0);
       const total = Math.max(expectedBytes, [...files.values()].reduce((sum, file) => sum + file.total, 0));
       const progress = Math.min(98, Math.round(loaded / total * 100));
-      report({ status: 'loading', progress, message: `Downloading ${label} to this device: ${progress}%.` });
+      report({ status: 'loading', progress, message: savedFiles.has(event.file) ? `Loading saved ${label} into memory: ${progress}%.` : `Downloading ${label} to this device: ${progress}%.` });
     } else if (event.status === 'done') report({ status: 'loading', message: `Preparing ${label} in this browser…` });
   };
 }
 
 async function initialize() {
   if (ready) return;
+  if ('caches' in globalThis) {
+    try {
+      const cache = await caches.open('transformers-cache');
+      const definition = AUDIO_FILES[kind === 'tts' ? 'tts' : 'stt'];
+      for (const file of definition.files) if (await cache.match(audioFileUrl(definition.model, file))) savedFiles.add(file);
+    } catch { /* Inference can still report a storage failure through setup. */ }
+  }
   report({ status: 'loading', progress: 0, message: `Loading ${kind === 'tts' ? 'Kokoro voice' : 'Whisper listening'} on this device…` });
   if (kind === 'tts') {
     tts = await KokoroTTS.from_pretrained(TTS_MODEL, { dtype: 'q8', device: 'wasm', progress_callback: progressFor('Kokoro', 92_000_000) });

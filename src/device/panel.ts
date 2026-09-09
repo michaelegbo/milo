@@ -1,5 +1,6 @@
 import { deleteDeviceModels, deviceHealth, initializeDevice, unloadDevice } from './transport';
 import { storedModels } from './model-storage';
+import { inspectSavedDownloads, type SavedDownloads } from './saved-downloads';
 import { usesCodex } from '../reply-provider';
 
 /** Consent and recovery live beside the studio, before any model is requested. */
@@ -8,9 +9,21 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
   const el = <T extends HTMLElement = HTMLElement>(id: string) => container.querySelector<T>(`#${id}`)!;
   el('device-unload').insertAdjacentHTML('afterend', '<button id="device-delete" class="text-button">Delete downloaded models</button>');
   container.insertAdjacentHTML('beforeend', `<dialog id="device-delete-dialog" aria-labelledby="device-delete-title" aria-describedby="device-delete-description"><span class="eyebrow">BROWSER STORAGE</span><h2 id="device-delete-title">Delete downloaded models?</h2><p id="device-delete-description">This stops Milo and removes saved voice, listening and reply models from this browser. Your chat and preferences stay here. You’ll need to download models again to use Milo.</p><p>Close other Milo tabs first. This affects this browser’s storage for Milo only.</p><p id="device-delete-inventory" role="status">Checking saved files…</p><p id="device-delete-error" role="alert" hidden></p><div class="device-delete-actions"><button id="device-delete-cancel" class="text-button" autofocus>Keep downloads</button><button id="device-delete-confirm" class="primary-button">Delete models</button></div></dialog>`);
+  el('device-delete').insertAdjacentHTML('afterend', '<button id="device-check-saved" class="text-button">Check saved downloads</button>');
+  el('device-status').insertAdjacentHTML('afterend', '<p id="device-saved-status" role="status">Checking saved downloads…</p>');
   const dialog = el<HTMLDialogElement>('device-delete-dialog');
   let deleting = false;
   let conversation = false, preparing: AbortController | undefined, error = '', notice = '', disposed = false;
+  let saved: SavedDownloads | undefined, storageError = '', checking = false, protection = '';
+  let scanPending: Promise<void> | undefined;
+  function checkSaved() {
+    return scanPending ??= (async () => {
+      checking = true; render();
+      try { saved = await inspectSavedDownloads(); storageError = ''; }
+      catch { saved = undefined; storageError = 'Saved downloads could not be checked. Browser storage may be blocked. Try checking again.'; }
+      finally { checking = false; scanPending = undefined; if (!disposed) render(); }
+    })();
+  }
   let quota = '';
   const supported = globalThis.isSecureContext && globalThis.crossOriginIsolated && typeof WebAssembly !== 'undefined' && typeof Worker !== 'undefined';
   const capability = !supported ? 'This browser cannot start local AI here. Open Milo in a current desktop browser over HTTPS with cross-origin isolation enabled. There is no server fallback.' : 'Browser features available. Model loading will check whether this device has enough memory.';
@@ -35,15 +48,27 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
       el('device-download-size').textContent = 'About 172 MB total · no local reply model needed';
     }
     container.querySelector('.device-privacy')!.textContent = usesCodex() ? 'Voice recordings stay on your device. Messages and conversation context go to OpenAI through Milo for ChatGPT replies.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
+    const needed = conversation ? usesCodex() ? ['tts', 'stt'] as const : ['tts', 'stt', profile === 'quality' ? 'quality' : 'fast'] as const : ['tts'] as const;
+    const allSaved = !!saved && needed.every(key => saved![key].ready);
+    const someSaved = !!saved && needed.some(key => saved![key].found > 0);
+    if (allSaved) {
+      el('device-setup-description').textContent = 'Your downloads are saved. Start Milo to load them back into memory.';
+      el('device-download-size').textContent = conversation && !usesCodex() && profile === 'hybrid' && !saved!.quality.ready ? 'Saved models ready to start · deeper replies may need a download' : 'Saved models · no model download needed';
+    } else if (someSaved) el('device-download-size').textContent = 'Saved files will be reused · only missing files download';
+    const labels = { tts: 'Voice', stt: 'Listening', fast: 'Fast replies', quality: 'Better replies' };
+    const savedBytes = saved ? Object.values(saved).reduce((sum, value) => sum + value.bytes, 0) : 0;
+    const sizeLabel = savedBytes >= 1e9 ? `${(savedBytes / 1e9).toFixed(2)} GB` : `${(savedBytes / 1e6).toFixed(1)} MB`;
+    el('device-saved-status').textContent = storageError || (saved ? Object.entries(saved).map(([key, value]) => labels[key as keyof typeof labels] + ': ' + (value.ready ? 'saved' : value.found ? 'partly saved' : 'not saved')).join(' · ') + `. ${sizeLabel} saved here. ` + (ready && !allSaved ? 'Some files could not be saved for next time. ' : '') + protection : 'Checking saved downloads…');
+    el<HTMLButtonElement>('device-check-saved').disabled = checking || deleting || !!preparing;
     const start = el<HTMLButtonElement>('device-start');
-    start.textContent = preparing || loading ? 'Preparing on your device…' : ready ? 'Ready on this device ✓' : error || failed ? 'Try loading again ↘' : conversation ? 'Download & start conversation ↘' : 'Download & start voice ↘';
-    start.disabled = deleting || !supported || !!preparing || !!loading || ready;
+    start.textContent = preparing || loading ? 'Preparing on your device…' : ready ? 'Ready on this device ✓' : error || failed ? 'Try loading again ↘' : checking && !saved ? 'Checking saved downloads…' : allSaved ? conversation ? 'Start saved conversation ↘' : 'Start saved voice ↘' : someSaved ? 'Download missing files & start ↘' : conversation ? 'Download & start conversation ↘' : 'Download & start voice ↘';
+    start.disabled = (checking && !saved) || deleting || !supported || !!preparing || !!loading || ready;
     el<HTMLButtonElement>('device-delete').disabled = deleting;
     const unload = el<HTMLButtonElement>('device-unload');
     unload.hidden = !preparing && !active;
     unload.textContent = preparing ? 'Cancel download' : 'Free up memory';
     unload.disabled = deleting;
-    const detail = error || (failed?.[1].message) || (!supported ? capability : preparing || loading ? engines.map(([name, value]) => `${name}: ${value.status === 'ready' ? 'ready' : value.status === 'loading' ? Number.isFinite(value.progress) ? `${Math.round(value.progress!)}%` : 'preparing' : 'waiting'}`).join(' · ') : ready ? 'Ready. Choose a sentence or start a conversation below.' : notice || 'Ready for your permission to download.');
+    const detail = error || (failed?.[1].message) || (!supported ? capability : preparing || loading ? engines.map(([name, value]) => `${name}: ${value.status === 'ready' ? 'ready' : value.status === 'loading' ? Number.isFinite(value.progress) ? `${Math.round(value.progress!)}%` : 'preparing' : 'waiting'}`).join(' · ') : ready ? 'Ready. Choose a sentence or start a conversation below.' : notice || (allSaved ? 'Saved downloads found in this browser. Reloading releases memory, not these files.' : someSaved ? 'Some files are already here. Start to reuse them and finish the missing downloads.' : 'Ready for your permission to download.'));
     el('device-status').textContent = detail;
     container.dataset.state = error || failed || !supported ? 'error' : preparing || loading ? 'loading' : ready ? 'ready' : 'unloaded';
     const progress = el<HTMLProgressElement>('device-progress');
@@ -57,12 +82,16 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     if (preparing || deleting) return;
     error = ''; notice = '';
     const controller = new AbortController(); preparing = controller; render();
+    if (navigator.storage?.persist) void navigator.storage.persist().then(granted => {
+      protection = granted ? 'Browser storage protection is enabled.' : 'Your browser may clear saved files when storage is low.';
+      if (!disposed) render();
+    }).catch(() => { protection = 'Browser storage protection is unavailable.'; });
     void initializeDevice(conversation, controller.signal).catch(reason => {
       if (controller.signal.aborted) return;
       error = reason instanceof Error ? reason.message : 'Milo could not load on this device. Free some memory and try Fast mode.';
     }).finally(() => {
       if (preparing === controller) preparing = undefined;
-      if (!disposed) { render(); window.dispatchEvent(new Event('milo-device-change')); }
+      if (!disposed) { void checkSaved(); render(); window.dispatchEvent(new Event('milo-device-change')); }
     });
   });
   el('device-unload').addEventListener('click', () => {
@@ -102,16 +131,19 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     }).finally(() => {
       deleting = false; confirm.disabled = false; cancel.disabled = false; confirm.textContent = 'Delete models';
       dialog.removeAttribute('aria-busy');
-      if (!disposed) { render(); if (dialog.open) cancel.focus(); else el('device-delete').focus(); }
+      if (!disposed) { void checkSaved(); render(); if (dialog.open) cancel.focus(); else el('device-delete').focus(); }
     });
   });
+  el('device-check-saved').addEventListener('click', () => { notice = ''; void checkSaved(); });
+  const onFocus = () => { if (!preparing && !deleting) void checkSaved(); };
+  window.addEventListener('focus', onFocus);
   const timer = setInterval(render, 700);
   const onProvider = () => { preparing?.abort(); preparing = undefined; error = ''; notice = ''; render(); };
   window.addEventListener('milo-provider-change', onProvider);
   window.addEventListener('milo-device-change', render);
-  render();
+  render(); void checkSaved();
   return {
     setConversation(value: boolean) { conversation = value; error = ''; render(); },
-    dispose() { disposed = true; preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
+    dispose() { disposed = true; window.removeEventListener('focus', onFocus); preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
   };
 }

@@ -336,7 +336,7 @@ test('deleting downloads confirms, clears actual model storage and preserves cha
   await setup(page);
   await seedModelStorage(page);
   await page.getByRole('tab', { name: 'Conversation' }).click();
-  await page.getByRole('button', { name: /Download & start conversation/ }).click();
+  await page.getByRole('button', { name: /Download.*start/ }).click();
   await expect(page.locator('#conversation-start')).toBeEnabled();
   await send(page, 'My name is Amara.');
   await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();

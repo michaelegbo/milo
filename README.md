@@ -100,6 +100,12 @@ Recording starts only after an explicit microphone action and permission. Stop/e
 
 Cached models support repeated inference without new model downloads. The website itself is not an installable offline PWA: reloading without network access is not guaranteed. Export a WAV when you want to keep a generated clip.
 
+Milo checks the actual saved files when the page opens. **Start saved voice/conversation** loads existing models back into memory after a reload; it does not download another copy. **Check saved downloads** rescans browser storage and shows which voice, listening and reply models are saved, partly saved or missing, plus their total size. Missing files are downloaded only after you start. Incomplete Quality shards do not prevent a complete Fast model from being reused.
+
+Milo requests browser storage protection when you start, but browsers may decline it or remove data under storage pressure. Private browsing, clearing site data, changing browser/profile, or using a different origin can make earlier downloads unavailable. Milo can only inspect storage belonging to this site in the current browser. **Delete downloaded models** remains available to remove these files explicitly.
+
+Reload verification on 9 September 2026 loaded real Kokoro, Whisper and Fast Qwen models, then started them after two reloads: zero additional successful model GET requests, with the same 13 cache files and approximately 1.29 GB stored. Separate cache-manager tests verified reuse beside an interrupted multi-file Quality download and downloading only its missing shard.
+
 ## Architecture
 
 ```mermaid
