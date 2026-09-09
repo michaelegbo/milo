@@ -1,0 +1,445 @@
+import { MicrophoneRecorder } from './microphone';
+import type { SpeechPlayer } from './speech';
+import { readReplyStream, rememberExplicitFacts, type ChatMessage as Message, type ConversationMemory } from './conversation-memory';
+
+type State = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'voicing' | 'speaking' | 'error';
+type ChatMode = 'fast' | 'quality' | 'hybrid';
+type ReplyRoute = { profile: 'fast' | 'quality'; reason: string };
+type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'vulkan' | 'cuda' | null; deviceName: string | null; message: string; revision: number };
+type Engine = { status: string; progress?: number; message?: string; profile?: string; queueDepth?: number; selectedModel?: string | null; residency?: 'dual' | 'single'; residencyReason?: string; device?: 'cpu' | 'gpu' | null; acceleration?: Acceleration; residentModels?: Record<string, { status: string; device?: 'cpu' | 'gpu' | null }> };
+type Health = { stt: Engine; chat: Engine; tts: Engine };
+const labels: Record<State, string> = { idle: 'Ready to talk', listening: 'Listening to you', transcribing: 'Hearing your words', thinking: 'Milo is thinking', voicing: 'Finding Milo’s voice', speaking: 'Milo is speaking', error: 'Let’s try again' };
+
+export function createConversation(options: {
+  container: HTMLElement; player: SpeechPlayer;
+  getVoice: () => { voice: string; speed: number };
+  setVoice: (voice: string) => void;
+  onSpeech: (text: string) => void;
+  onStateChange: () => void;
+}) {
+  const { container, player } = options;
+  container.innerHTML = `
+    <div class="panel-heading"><div><span class="eyebrow">A TWO-WAY CONVERSATION</span><h2 id="conversation-heading">Hello again, human.</h2></div><button id="new-conversation" class="text-button" title="Clear this conversation">New chat</button></div>
+    <div id="conversation-engines" class="conversation-engines" role="status">Preparing your local conversation…</div>
+    <button id="conversation-retry" class="retry-button" hidden>Try loading again</button>
+    <div class="conversation-model"><label for="conversation-model">MILO’S MIND</label><select id="conversation-model"><option value="fast">Fast · Qwen 1.5B</option><option value="quality">Better answers · Qwen 4B</option><option value="hybrid">Hybrid · Adapts to you</option></select><span id="model-hint">Quick, everyday conversation.</span><div id="conversation-route" class="conversation-route" role="status" hidden><span id="route-label">Chooses for each reply</span><span id="route-reason">Simple chat stays quick. Complex questions get more thought.</span></div></div>
+    <div class="conversation-acceleration"><div><span class="gpu-heading">GPU acceleration</span><span id="gpu-device">Checking compatible hardware…</span></div><button id="gpu-toggle" class="gpu-toggle" role="switch" aria-label="GPU acceleration" aria-checked="false" aria-describedby="gpu-status" disabled><span class="switch" aria-hidden="true"></span><span id="gpu-toggle-label">Off</span></button><p id="gpu-status" role="status">Checking for a GPU…</p><span class="gpu-scope">Replies only · speech stays on CPU</span></div>
+    <div class="conversation-log" id="conversation-log" role="log" aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions" tabindex="0"><div id="conversation-empty" class="conversation-empty"><span class="conversation-spark" aria-hidden="true">✳</span><h3>A voice on the other side.</h3><p>Tell Milo about your day, ask a question,<br>or just say hello.</p><span>Your conversation stays in this tab.</span></div></div>
+    <div class="conversation-feedback"><span class="conversation-light" aria-hidden="true"></span><p id="conversation-status" role="status">Start talking, or send a little note below.</p></div>
+    <div class="mic-controls">
+      <div class="mic-device"><label for="mic-device">MICROPHONE</label><div class="mic-input"><select id="mic-device" aria-label="Microphone input"><option value="">System default</option></select><button id="mic-refresh" aria-label="Refresh microphones" title="Refresh microphones"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></svg></button></div></div>
+      <button id="mic-toggle" class="mic-toggle" aria-label="Mute microphone" aria-pressed="false"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/><path class="mic-slash" d="m3 3 18 18"/></svg><span id="mic-toggle-label">Mute mic</span></button>
+      <div class="mic-readout"><span id="mic-state" role="status">Mic idle</span><div id="mic-meter" class="mic-input-meter" role="meter" aria-label="Microphone input level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="mic-level"></i></div></div>
+    </div>
+    <div class="conversation-controls"><button id="conversation-start" class="primary-button" disabled>Start conversation</button><button id="conversation-end" class="stop-button" disabled aria-label="End conversation" title="End conversation">■</button></div>
+    <div class="conversation-preferences"><label><input id="conversation-loop" type="checkbox" checked> Keep listening after each reply</label><label class="sr-only" for="conversation-voice">Conversation voice</label><select id="conversation-voice" aria-label="Conversation voice"><option value="am_michael">Michael</option><option value="af_heart">Heart</option><option value="bf_emma">Emma</option></select></div>
+    <label class="conversation-interruption"><input id="conversation-interrupt" type="checkbox" checked> Interrupt Milo by speaking <span>During voice conversations · headphones work best</span></label>
+    <form id="conversation-form" class="conversation-composer"><label class="sr-only" for="conversation-input">Message Milo</label><input id="conversation-input" type="text" maxlength="1000" placeholder="Or type something to Milo…" autocomplete="off"><button id="conversation-send" type="submit" aria-label="Send message" disabled>Send ↗</button></form>
+    <details class="conversation-memory"><summary>What Milo remembers <span id="memory-count">This chat only</span></summary><p id="memory-detail">Explicit details and a short conversation summary will appear here. New chat clears everything.</p></details>
+    <p class="conversation-note">English voice · Local inference · Whisper + Qwen + Kokoro</p>`;
+  const el = <T extends HTMLElement = HTMLElement>(id: string) => container.querySelector<T>(`#${id}`)!;
+  const checked = (id: string) => el<HTMLInputElement>(id).checked;
+  const recorder = new MicrophoneRecorder();
+  const messages: Message[] = [];
+  const facts = new Map<string, string>();
+  let summary = '', summarizedThrough = 0, memoryVersion = 0;
+  let summaryRequest: AbortController | undefined;
+  let state: State = 'idle', detail = 'Start talking, or send a little note below.';
+  let visible = false, version = 0, ownsPlayback = false, loop = false, receivedReply = false;
+  let health: Health | undefined, healthError = '', checking = false, preparing = false, profilePending = false;
+  let profile: ChatMode = 'fast';
+  let gpuIntent: boolean | undefined, gpuRevision: number | undefined, gpuEpoch = 0, gpuError = '';
+  let gpuRequest: AbortController | undefined;
+  let replyRoute: ReplyRoute | undefined;
+  let request: AbortController | undefined;
+  let nextListen: ReturnType<typeof setTimeout> | undefined;
+  let micMuted = false, micLive = false, selectedDevice = '', deviceQuery = 0, disposed = false;
+  let voiceArmed = false, monitoring = false, monitorSuppressed = false, inputLevel = 0;
+  const busy = () => !['idle', 'error', 'speaking'].includes(state);
+  const textReady = () => gpuIntent === undefined && health?.chat.acceleration?.status !== 'switching' && health?.chat.status === 'ready' && (!health.chat.profile || health.chat.profile === profile) && health?.tts.status === 'ready';
+  const voiceReady = () => textReady() && health?.stt.status === 'ready';
+  const memory = (): ConversationMemory => ({ summary, facts: [...facts.values()] });
+
+  function renderMemory() {
+    el('memory-count').textContent = facts.size || summary ? `${facts.size} details${summary ? ' + summary' : ''}` : 'This chat only';
+    el('memory-detail').textContent = [...facts.values(), summary && `Earlier conversation: ${summary}`, 'Stored only for this chat. New chat clears everything.'].filter(Boolean).join('\n');
+  }
+  function render() {
+    const start = el<HTMLButtonElement>('conversation-start');
+    start.textContent = state === 'listening' ? 'Send voice message' : ['transcribing', 'thinking', 'voicing'].includes(state) ? `${labels[state]}…` : micMuted ? 'Unmute & talk' : state === 'speaking' ? 'Interrupt & talk' : 'Start conversation';
+    start.disabled = state !== 'listening' && (!voiceReady() || ['transcribing', 'thinking', 'voicing'].includes(state));
+    el<HTMLButtonElement>('conversation-end').disabled = ['idle', 'error'].includes(state) && !loop;
+    el<HTMLButtonElement>('conversation-send').disabled = !textReady() || busy() || !el<HTMLInputElement>('conversation-input').value.trim();
+    el<HTMLSelectElement>('conversation-model').disabled = gpuIntent !== undefined || health?.chat.acceleration?.status === 'switching' || ownsPlayback || recorder.active || Boolean(summaryRequest) || !health || health.chat.status === 'loading' || (health.chat.queueDepth ?? 0) > 0 || !['idle', 'error'].includes(state);
+    el('model-hint').textContent = profile === 'fast' ? 'Quick, everyday conversation. 1.1 GB on first use.' : profile === 'quality' ? 'More capable replies. 2.5 GB on first use; slower on CPU.' : health?.chat.acceleration?.enabled ? health.chat.residency === 'dual' ? 'Quick on CPU. Deeper replies on GPU. Both stay ready.' : 'Quick on CPU. Deeper replies load onto the GPU.' : health?.chat.residency === 'single' ? 'Adapts each reply. Models load as needed to save memory.' : 'Quick for simple turns. More thought when it matters.';
+    el('model-hint').title = profile === 'hybrid' ? health?.chat.residencyReason || 'Both local models are prepared when memory allows. First use downloads 3.6 GB in total.' : '';
+    el('conversation-route').hidden = profile !== 'hybrid';
+    el('conversation-route').dataset.depth = replyRoute?.profile || 'auto';
+    el('route-label').textContent = !replyRoute ? 'Chooses for each reply' : replyRoute.profile === 'fast' ? 'Quick reply' : ['thinking', 'voicing'].includes(state) ? 'Thinking deeper' : 'Considered reply';
+    el('route-reason').textContent = replyRoute?.reason || 'Simple chat stays quick. Complex questions get more thought.';
+    const acceleration = health?.chat.acceleration;
+    const gpuEnabled = gpuIntent ?? acceleration?.enabled ?? false;
+    const switchingGpu = gpuIntent !== undefined || acceleration?.status === 'switching';
+    const gpuResidentReady = Object.values(health?.chat.residentModels ?? {}).some(model => model.status === 'ready' && model.device === 'gpu');
+    const readyDeviceLabel = health?.chat.device === 'gpu' ? 'GPU active' : profile === 'hybrid' ? gpuResidentReady ? 'GPU ready · quick replies use CPU' : 'GPU selected for deeper replies' : 'Preparing GPU replies…';
+    const toggle = el<HTMLButtonElement>('gpu-toggle');
+    toggle.setAttribute('aria-checked', String(gpuEnabled));
+    // OFF remains available while a GPU model is loading or answering.
+    toggle.disabled = !gpuEnabled && !acceleration?.available;
+    toggle.title = 'Switching stops the current turn and reloads the same models. Your chat and memory stay here.';
+    el('gpu-toggle-label').textContent = gpuEnabled ? 'On' : 'Off';
+    el('gpu-device').textContent = acceleration?.deviceName || (acceleration?.status === 'unavailable' ? 'Compatible GPU unavailable' : 'Checking compatible hardware…');
+    el('gpu-device').title = acceleration?.message || '';
+    el('gpu-status').textContent = gpuError || (switchingGpu ? gpuEnabled ? 'Switching to GPU…' : 'Returning to CPU…' : !acceleration || acceleration.status === 'detecting' ? 'Checking for a GPU…' : gpuEnabled ? health?.chat.status === 'ready' ? readyDeviceLabel : 'Preparing GPU replies…' : acceleration.status === 'unavailable' || acceleration.status === 'error' ? acceleration.message || 'GPU unavailable. CPU replies are available.' : acceleration.message || 'CPU active · GPU is optional');
+    el('conversation-status').textContent = detail;
+    container.dataset.state = state;
+    container.dataset.micMuted = String(micMuted);
+    el('mic-toggle').setAttribute('aria-pressed', String(micMuted));
+    el('mic-toggle').setAttribute('aria-label', micMuted ? 'Unmute microphone' : 'Mute microphone');
+    el('mic-toggle-label').textContent = micMuted ? 'Unmute mic' : 'Mute mic';
+    el('mic-state').textContent = micMuted ? 'Mic muted' : monitoring ? 'Listening for interruption' : state === 'listening' ? micLive ? 'Listening' : 'Waiting for permission' : ['transcribing', 'thinking', 'voicing', 'speaking'].includes(state) ? 'Mic paused' : 'Mic idle';
+    el('conversation-engines').textContent = healthError || (!health ? 'Connecting to your local engines…' : [
+      ['Whisper', health.stt], [(health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], ['Kokoro', health.tts],
+    ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
+    el('conversation-engines').title = 'All inference stays on this computer. Conversation replies can use the GPU; listening and speech use CPU. Models are cached for later use.';
+    el('conversation-retry').hidden = !healthError && !Object.values(health ?? {}).some(engine => engine.status === 'error');
+    options.onStateChange();
+  }
+  function setState(next: State, text?: string) { state = next; detail = text ?? `${labels[next]}…`; render(); }
+  function setLevel(level: number) {
+    inputLevel = Math.max(0, Math.min(1, level));
+    const value = Math.round(inputLevel * 100);
+    el('mic-level').style.width = `${value}%`;
+    el('mic-meter').setAttribute('aria-valuenow', String(value));
+  }
+  function stopMonitor() { recorder.cancel(); monitoring = false; micLive = false; setLevel(0); }
+  async function refreshDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const query = ++deviceQuery;
+    try {
+      const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput' && device.deviceId && !['default', 'communications'].includes(device.deviceId));
+      if (disposed || query !== deviceQuery) return;
+      const select = el<HTMLSelectElement>('mic-device');
+      select.replaceChildren(new Option('System default', ''), ...devices.map((device, i) => new Option(device.label || `Microphone ${i + 1}`, device.deviceId)));
+      if (selectedDevice && !devices.some(device => device.deviceId === selectedDevice)) {
+        selectedDevice = '';
+        if (monitoring) { stopMonitor(); monitorSuppressed = true; loop = false; voiceArmed = false; clearTimeout(nextListen); render(); }
+        else if (state === 'listening') { end(); setState('idle', 'That microphone disconnected. Choose another input and start again.'); }
+      }
+      select.value = selectedDevice;
+      select.title = devices.some(device => !device.label) ? 'Microphone names appear after you allow microphone access.' : 'Choose the microphone for your next voice message.';
+    } catch { el('mic-device').title = 'Could not list microphones. You can still try the system default.'; }
+  }
+  function setMuted(value: boolean) {
+    micMuted = value;
+    if (value) {
+      loop = false; clearTimeout(nextListen); monitorSuppressed = true;
+      if (monitoring) stopMonitor();
+      else if (state === 'listening') end();
+      if (state === 'idle' || state === 'error') detail = 'Microphone muted. You can still type to Milo.';
+    } else if (state === 'idle') detail = 'Microphone ready. Start a conversation when you’re ready.';
+    render();
+  }
+  function stopWork(preserveSummary = false) {
+    version++; clearTimeout(nextListen);
+    request?.abort(); request = undefined;
+    if (!preserveSummary) { memoryVersion++; summaryRequest?.abort(); summaryRequest = undefined; }
+    stopMonitor();
+    ownsPlayback = false; loop = false; voiceArmed = false; monitorSuppressed = false; receivedReply = false;
+    replyRoute = undefined;
+    player.stop();
+  }
+  function end() { stopWork(); setState('idle', 'Conversation paused. Start again whenever you’re ready.'); }
+  function fail(error: unknown, token: number) {
+    if (token !== version || !visible) return;
+    stopWork();
+    setState('error', error instanceof Error ? error.message : 'Something went wrong. Please try again.');
+  }
+  function scrollLog() { el('conversation-log').scrollTop = el('conversation-log').scrollHeight; }
+  function append(message: Message) {
+    messages.push(message); el('conversation-empty')?.remove();
+    const bubble = document.createElement('div'); bubble.className = `conversation-message ${message.role}`;
+    const name = document.createElement('span'); name.textContent = message.role === 'user' ? 'YOU' : 'MILO';
+    const text = document.createElement('p'); text.textContent = message.content;
+    bubble.append(name, text); el('conversation-log').append(bubble); scrollLog();
+    return text;
+  }
+  async function post(path: string, body: Blob | object, signal: AbortSignal) {
+    const audio = body instanceof Blob;
+    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': audio ? 'audio/wav' : 'application/json' }, body: audio ? body : JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || 'Milo could not finish that turn. Please try again.');
+    return result;
+  }
+  async function compactMemory() {
+    if (summaryRequest || messages.length - summarizedThrough <= 10) return;
+    // Compact complete older turns, keeping six recent messages verbatim.
+    let endIndex = Math.min(messages.length - 6, summarizedThrough + 12);
+    while (endIndex > summarizedThrough && messages[endIndex - 1].role !== 'assistant') endIndex--;
+    if (endIndex <= summarizedThrough) return;
+    const older = messages.slice(summarizedThrough, endIndex);
+    const previousMemory = memory();
+    // Save labelled excerpts immediately. If CPU summarization is interrupted
+    // by a new turn, older context still has a bounded, non-inferred checkpoint.
+    const excerpts = older.map(message => `${message.role === 'user' ? 'User' : 'Milo'}: ${message.content.replace(/\s+/g, ' ').slice(0, 170)}`).join('\n');
+    summary = [summary.slice(0, 380), excerpts.slice(-800)].filter(Boolean).join('\n');
+    summarizedThrough = endIndex; renderMemory();
+    const epoch = memoryVersion;
+    const controller = new AbortController(); summaryRequest = controller; render();
+    try {
+      const result = await post('/api/chat/summary', { messages: older, memory: previousMemory, profile }, controller.signal);
+      if (epoch !== memoryVersion || controller.signal.aborted) return;
+      summary = String(result.summary || '').slice(0, 1200); summarizedThrough = endIndex; renderMemory();
+    } catch { /* Keep the last summary and explicit facts if background compaction fails. */ }
+    finally { if (summaryRequest === controller) { summaryRequest = undefined; if (visible) render(); } }
+  }
+  async function reply(text: string, token: number) {
+    if (token !== version) return;
+    memoryVersion++; summaryRequest?.abort(); summaryRequest = undefined;
+    if (messages.at(-1)?.role === 'user') messages.pop();
+    append({ role: 'user', content: text }); rememberExplicitFacts(text, facts); renderMemory();
+    receivedReply = false; replyRoute = undefined;
+    setState('thinking', 'Milo is thinking about what you said…');
+    const controller = new AbortController(); request = controller;
+    const context = messages.slice(-11);
+    const assistant: Message = { role: 'assistant', content: '' };
+    let paragraph: HTMLElement | undefined;
+    async function* sentences() {
+      let spokenBuffer = '';
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: context, memory: memory(), profile }),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]),
+      });
+      for await (const event of readReplyStream(response)) {
+        if (token !== version || !visible) return;
+        if (event.type === 'routing' && profile === 'hybrid' && (event.profile === 'fast' || event.profile === 'quality')) {
+          replyRoute = { profile: event.profile, reason: typeof event.reason === 'string' ? event.reason.slice(0, 240) : event.profile === 'quality' ? 'This question benefits from more reasoning.' : 'A straightforward conversational turn.' };
+          setState('thinking', event.profile === 'quality' ? 'Milo is taking a little more time to think this through…' : 'Milo is putting together a quick reply…');
+        } else if (event.type === 'delta' && event.text) {
+          if (!paragraph) paragraph = append(assistant);
+          assistant.content += event.text; paragraph.textContent = assistant.content; scrollLog();
+          receivedReply = true; options.onSpeech(assistant.content);
+          spokenBuffer += event.text;
+          // Text streams as words. Send only complete phrases to the voice engine.
+          let boundary: RegExpExecArray | null;
+          const punctuation = /[.!?]["”’)]*(?:\s+|$)/g;
+          while ((boundary = punctuation.exec(spokenBuffer))) {
+            const end = boundary.index + boundary[0].length;
+            const sentence = spokenBuffer.slice(0, end).trim();
+            if (/\b(?:Mr|Mrs|Ms|Dr|Prof|e\.g|i\.e)\.$/i.test(sentence)) continue;
+            spokenBuffer = spokenBuffer.slice(end); punctuation.lastIndex = 0;
+            if (sentence) yield sentence;
+          }
+        } else if (event.type === 'done') {
+          if (!assistant.content.trim()) throw new Error('Milo did not produce a reply. Please try again.');
+          if (event.text) { assistant.content = event.text; paragraph!.textContent = event.text; options.onSpeech(event.text); }
+          if (spokenBuffer.trim()) yield spokenBuffer.trim();
+          spokenBuffer = '';
+        }
+      }
+    }
+    try {
+      ownsPlayback = true;
+      const voice = options.getVoice();
+      await player.speakStream(sentences(), voice.voice, voice.speed);
+      if (token === version && visible && player.state !== 'error') void compactMemory();
+    } catch (error) { fail(error, token); }
+    finally { if (request === controller) request = undefined; }
+  }
+  function captureComplete(wav: Blob, token: number) {
+    if (token !== version || !visible) return;
+    monitoring = false; micLive = false; setLevel(0);
+    setState('transcribing', 'Turning your voice into words…');
+    request = new AbortController();
+    void post('/api/transcribe', wav, request.signal).then(result => {
+      if (token === version && visible) return reply(result.text, token);
+    }).catch(error => fail(error, token));
+  }
+  async function listen(continueLoop = true, preserveSummary = false) {
+    if (!visible || !voiceReady() || micMuted) return;
+    stopWork(preserveSummary); loop = continueLoop; voiceArmed = true;
+    const token = version;
+    setState('listening', 'Go ahead. A short pause sends your message.');
+    void player.unlock().catch(error => fail(error, token));
+    await recorder.start({ deviceId: selectedDevice,
+      onStarted: () => { if (token === version && visible) { micLive = true; render(); void refreshDevices(); } },
+      onLevel: level => { if (token === version) setLevel(level); },
+      onError: message => fail(new Error(message), token),
+      onComplete: wav => captureComplete(wav, token),
+    });
+  }
+  async function startMonitor() {
+    if (!visible || !voiceArmed || micMuted || monitorSuppressed || recorder.active || monitoring || !checked('conversation-interrupt')) return;
+    let token = version;
+    monitoring = true; render();
+    await recorder.start({ deviceId: selectedDevice, waitForSpeech: true, startThreshold: 0.045, startSpeechSeconds: 0.18, maxInitialSilenceMs: 120_000,
+      onStarted: () => { if (token === version && visible && monitoring) { micLive = true; render(); } },
+      onLevel: level => { if (token === version) setLevel(level); },
+      onSpeechStart: () => {
+        if (token !== version || !visible || !monitoring) return;
+        // Keep this capture and its pre-roll; invalidate only the outgoing reply.
+        token = ++version; clearTimeout(nextListen);
+        request?.abort(); request = undefined; memoryVersion++; summaryRequest?.abort(); summaryRequest = undefined;
+        ownsPlayback = false; receivedReply = false; monitoring = false; loop = true;
+        player.stop(true);
+        setState('listening', 'Go ahead — I’m listening.');
+      },
+      onError: message => {
+        if (token !== version || !visible) return;
+        if (!monitoring) { fail(new Error(message), token); return; }
+        stopMonitor(); monitorSuppressed = true; loop = false;
+        render(); el('mic-state').textContent = message;
+      },
+      onComplete: wav => captureComplete(wav, token),
+    });
+  }
+  function onPlaybackChange() {
+    if (!ownsPlayback || !visible) return;
+    if (player.state === 'generating') setState(receivedReply ? 'voicing' : 'thinking', receivedReply ? 'The next part of Milo’s reply is on its way…' : replyRoute?.profile === 'quality' ? 'Milo is taking a little more time to think this through…' : 'Milo is thinking about what you said…');
+    else if (player.state === 'playing') {
+      setState('speaking', voiceArmed && checked('conversation-interrupt') && !micMuted ? 'Milo is talking. Speak whenever you want to jump in.' : 'Milo is talking. You can interrupt to take a turn.');
+      void startMonitor();
+    } else if (player.state === 'error') fail(new Error(player.error), version);
+    else if (player.state === 'idle' && receivedReply && !player.streaming) {
+      ownsPlayback = false;
+      if (monitoring) stopMonitor();
+      setState('idle', 'Your turn. What’s on your mind?');
+      if (loop && !micMuted && checked('conversation-loop')) {
+        const token = version;
+        nextListen = setTimeout(() => { if (token === version && visible && loop && !micMuted && checked('conversation-loop')) void listen(true, true); }, 350);
+      } else { loop = false; voiceArmed = false; render(); }
+    }
+  }
+  function acceptHealth(next: Health, fromPoll = false) {
+    const revision = next.chat.acceleration?.revision;
+    if (typeof revision === 'number') {
+      if (fromPoll && gpuRevision !== undefined && revision !== gpuRevision && gpuIntent === undefined) {
+        stopWork();
+        state = 'idle';
+        detail = 'Acceleration changed. Your chat is here; this turn has stopped.';
+      }
+      gpuRevision = revision;
+    }
+    health = next;
+    if (fromPoll && next.chat.acceleration?.status === 'ready') gpuError = '';
+  }
+  async function setGpu(enabled: boolean) {
+    if (enabled && !health?.chat.acceleration?.available) return;
+    const epoch = ++gpuEpoch;
+    gpuRequest?.abort();
+    stopWork();
+    gpuIntent = enabled; gpuError = '';
+    setState('idle', enabled ? 'Switching to GPU. Your conversation and memory stay here.' : 'Returning to CPU. Your conversation and memory stay here.');
+    const controller = new AbortController();
+    gpuRequest = controller;
+    try {
+      const response = await fetch('/api/conversation/acceleration', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+      });
+      const result = await response.json();
+      if (epoch !== gpuEpoch || disposed) return;
+      if (!response.ok) throw new Error(result.message || 'Could not change acceleration. CPU mode remains available.');
+      acceptHealth(result); healthError = '';
+    } catch (error) {
+      if (epoch !== gpuEpoch || disposed) return;
+      gpuError = error instanceof Error ? error.message : 'Could not change acceleration. Try again.';
+    } finally {
+      if (epoch === gpuEpoch) {
+        gpuIntent = undefined; gpuRequest = undefined;
+        if (visible) { render(); void checkHealth(); }
+      }
+    }
+  }
+  async function checkHealth() {
+    if (checking || !visible) return;
+    checking = true;
+    const epoch = gpuEpoch;
+    try {
+      const response = await fetch('/api/conversation/health', { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) throw new Error('offline');
+      const next: Health = await response.json();
+      if (epoch !== gpuEpoch || !visible) return;
+      const wasReady = voiceReady(); acceptHealth(next, true); healthError = '';
+      if (health?.chat.profile === profile) profilePending = false;
+      if (!profilePending && health?.chat.profile && ['fast', 'quality', 'hybrid'].includes(health.chat.profile) && !ownsPlayback && !recorder.active && ['idle', 'error'].includes(state)) {
+        // The local model is shared across tabs. Adopt an intentional change
+        // made elsewhere instead of each tab repeatedly switching it back.
+        profile = health.chat.profile as ChatMode;
+        el<HTMLSelectElement>('conversation-model').value = profile;
+      }
+      if (!wasReady && voiceReady() && state === 'idle') detail = 'Ready when you are. Start talking, or type a message.';
+      // A cancelled worker may still be draining when a profile was selected.
+      // Retry that selection once it is idle, instead of leaving the UI stranded.
+      if (profilePending && health?.chat.profile && health.chat.profile !== profile && health.chat.status !== 'loading' && !(health.chat.queueDepth ?? 0) && ['idle', 'error'].includes(state)) void prepare();
+    } catch { if (epoch === gpuEpoch) { healthError = 'Local conversation is offline. Start the app, then try loading again.'; health = undefined; } }
+    finally { checking = false; if (visible) render(); }
+  }
+  async function prepare() {
+    if (preparing || gpuIntent !== undefined || health?.chat.acceleration?.status === 'switching') return;
+    preparing = true; profilePending = true;
+    const token = version;
+    try {
+      const response = await fetch('/api/conversation/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }), signal: AbortSignal.timeout(5000) });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Cannot prepare the selected model.');
+      if (!visible || token !== version) return;
+      acceptHealth(result); healthError = '';
+      if (!health?.chat.profile || health.chat.profile === profile) profilePending = false;
+      if (!voiceReady() && ['idle', 'error'].includes(state)) setState('idle', profile === 'hybrid' ? 'Preparing Hybrid. Milo will choose the right model for each reply.' : profile === 'quality' ? 'Preparing the 4B model. First use downloads 2.5 GB; later runs use the cache.' : 'Preparing your local engines. First use downloads the models; later runs use the cache.');
+      render();
+    } catch (error) { if (visible && token === version) { healthError = error instanceof Error ? error.message : 'Cannot prepare the local engines.'; render(); } }
+    finally { preparing = false; }
+  }
+  el('conversation-start').addEventListener('click', () => { if (state === 'listening') recorder.finish(); else { if (micMuted) setMuted(false); void listen(); } });
+  el('mic-toggle').addEventListener('click', () => setMuted(!micMuted));
+  el('mic-refresh').addEventListener('click', () => void refreshDevices());
+  el('gpu-toggle').addEventListener('click', () => void setGpu(!(gpuIntent ?? health?.chat.acceleration?.enabled ?? false)));
+  el('mic-device').addEventListener('change', () => {
+    selectedDevice = el<HTMLSelectElement>('mic-device').value;
+    if (monitoring) { stopMonitor(); monitorSuppressed = true; loop = false; voiceArmed = false; clearTimeout(nextListen); render(); }
+    else if (state === 'listening') { end(); setState('idle', 'Microphone changed. Start again to use the new input.'); }
+  });
+  el('conversation-interrupt').addEventListener('change', () => {
+    if (!checked('conversation-interrupt') && monitoring) { stopMonitor(); render(); }
+    else if (player.state === 'playing' && ownsPlayback) { monitorSuppressed = false; void startMonitor(); }
+  });
+  el('conversation-model').addEventListener('change', () => {
+    stopWork(); profile = el<HTMLSelectElement>('conversation-model').value as ChatMode;
+    health = undefined; setState('idle', 'Preparing the selected mind…'); void prepare();
+  });
+  const onDeviceChange = () => { if (visible) void refreshDevices(); };
+  navigator.mediaDevices?.addEventListener('devicechange', onDeviceChange);
+  el('conversation-end').addEventListener('click', end);
+  el('conversation-retry').addEventListener('click', () => void prepare());
+  el('new-conversation').addEventListener('click', () => {
+    end(); messages.length = 0; facts.clear(); summary = ''; summarizedThrough = 0;
+    el('conversation-log').replaceChildren(); renderMemory(); setState('idle', 'A fresh conversation. Say hello or type a message.');
+  });
+  el('conversation-input').addEventListener('input', render);
+  el('conversation-loop').addEventListener('change', () => { if (!checked('conversation-loop')) { clearTimeout(nextListen); loop = false; render(); } });
+  el('conversation-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const input = el<HTMLInputElement>('conversation-input'); const text = input.value.trim();
+    if (!text || !textReady() || busy()) return;
+    stopWork(); input.value = ''; const token = version;
+    void player.unlock().then(() => { if (token === version) return reply(text, token); }).catch(error => fail(error, token));
+  });
+  el<HTMLSelectElement>('conversation-voice').value = options.getVoice().voice;
+  el('conversation-voice').addEventListener('change', () => options.setVoice(el<HTMLSelectElement>('conversation-voice').value));
+  const healthTimer = setInterval(() => void checkHealth(), 2000);
+  return {
+    get label() { return state === 'thinking' && replyRoute?.profile === 'quality' && profile === 'hybrid' ? 'Thinking deeper' : labels[state]; }, get state() { return state; },
+    get presenceState(): State { return state === 'listening' && !micLive ? 'idle' : state; },
+    get inputLevel() { return inputLevel; },
+    onPlaybackChange,
+    setVisible(value: boolean) {
+      visible = value; container.hidden = !value;
+      if (value) { el<HTMLSelectElement>('conversation-voice').value = options.getVoice().voice; void checkHealth().then(() => { if (visible) void prepare(); }); void refreshDevices(); render(); }
+      else end();
+    },
+    cancel: end,
+    dispose() { disposed = true; visible = false; stopWork(); gpuRequest?.abort(); clearInterval(healthTimer); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+  };
+}

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.cache/
+test-results/
+playwright-report/
+*.log
+server/verification/
+.env
+.env.*
+!.env.example
+!.env.template
+coverage/
+.DS_Store
+Thumbs.db

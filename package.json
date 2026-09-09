@@ -1,0 +1,28 @@
+{
+  "name": "milo-avatar-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev:speech": "node server/index.mjs",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
+    "test": "node --test server/*.test.mjs && playwright test"
+  },
+  "dependencies": {
+    "@fontsource-variable/dm-sans": "5.3.0",
+    "@fontsource-variable/manrope": "5.3.0",
+    "@huggingface/transformers": "3.8.1",
+    "kokoro-js": "1.2.1",
+    "node-llama-cpp": "3.20.0",
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/three": "0.185.4",
+    "typescript": "7.0.2",
+    "vite": "8.2.2"
+  }
+}
