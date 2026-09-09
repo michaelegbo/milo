@@ -166,7 +166,7 @@ server session and is not a durable chat backup.
 ## Deployment verification and recovery
 
 `GET /healthz` is the container's static liveness check. `GET /release.json`
-returns the build revision and `processing: device-only`. Neither proves that
+returns the build revision and `processing: device-default`. Neither proves that
 inference works on a visitor's browser.
 
 Before sharing the URL, verify:
@@ -176,8 +176,11 @@ Before sharing the URL, verify:
   models, with progress and useful failures.
 - A real generated voice clip, microphone transcription, and Fast/Quality/Hybrid
   replies on the browsers being claimed as supported.
-- Developer tools show conversation text and audio staying in the browser, with
-  asset downloads only; `/api/` has no backend, and POST requests return `405`.
+- In the default provider, developer tools show conversation text and audio staying
+  in the browser, with asset downloads only. Other inference API routes return `404`.
+- ChatGPT opt-in obtains a real OpenAI code through `/api/codex/`; refresh preserves
+  the pending connection, cancellation works, and Disconnect removes that session's
+  credentials. Audio remains local. Test real replies after personal sign-in separately.
 - Stop/unload, cache reuse, model switching, and separate tab histories work.
 
 For a missing model, inspect its static URL, filename, read permissions, file size,
