@@ -6,6 +6,8 @@ Milo is an expressive Three.js robot that speaks your sentences and has voice or
 
 ![Milo's cream and orange robot with textured materials and speech controls](docs/images/milo-studio.png)
 
+[Watch the 38-second demo](https://github.com/michaelegbo/milo/releases/download/v1.0.0/milo-launch-demo.webm) — captured from the live website with real Kokoro speech and avatar animation. [Release and downloads](https://github.com/michaelegbo/milo/releases/tag/v1.0.0).
+
 ## Try Milo
 
 1. Open the website in a recent desktop browser. The avatar appears before any model download.

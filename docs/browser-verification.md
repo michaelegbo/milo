@@ -1,14 +1,71 @@
 # Browser inference verification
 
-These measurements were collected on **9 September 2026** against the device-only
-development working tree on a Windows desktop. They verify specific browser
-paths, not every device or the final public deployment. Production-domain checks
-and the released commit must be recorded separately before claiming live support.
+These measurements were collected on **9 September 2026** on a Windows desktop.
+The public device-only application at **https://milo.seemplifyai.com** passed the
+real browser journeys below on runtime revision
+`80c4d3420fd98fac6fc34af729705b79473880b1`, confirmed through `/release.json`.
+Earlier isolated development checks are recorded separately. These results cover
+specific paths on the tested computer, not every browser or device.
 
-The initial source commit submitted to Dokploy is
-`e36376a212667f611dd278d16f9acb9fefbe92de`. At the time this note was finalized,
-deployment had started; this document does not assert that the public URL serves
-that revision or that its live user journey has passed.
+## Public application: real voice and conversation
+
+A fresh headless Google Chrome context loaded the deployed production bundles
+and used the visible controls. No inference clients were mocked and no source
+modules were imported by the harness. Passive Web Audio instrumentation measured
+the actual generated buffers. The browser reported HTTPS, cross-origin isolation,
+JSPI, 16 hardware threads, and WebGPU support.
+
+| Check | Measured result |
+| --- | --- |
+| Before consent | No model downloads or inference API requests; the setup panel remained unloaded. |
+| Voice setup | The visible download action prepared Kokoro in 6.247 seconds. |
+| Sentence studio | “Let Milo speak” started actual audio in 8.548 seconds: 5.15 seconds of speech, peak 0.503 and RMS 0.059. |
+| Talking motion | Two captured speech frames showed the mouth opening and the arm/body pose changing while real audio played. |
+| Conversation setup | Whisper and Fast became ready in 22.866 seconds after voice setup. |
+| Fast CPU turn | “My name is Rowan. Say hello in one short sentence.” produced “Hello, Rowan!” First text arrived in 16.013 seconds and playback began in 19.183 seconds. |
+| Hybrid and GPU | Selecting Hybrid and turning on GPU preserved the mode; GPU preparation took 3.163 seconds. The hardware label was “Browser WebGPU.” |
+| Hybrid quick turn | “Hello Milo!” produced “Hello again, Rowan! How can I help you today?” with the Quick reply route. First text arrived in 0.977 seconds and audio began in 4.327 seconds. |
+| Unload | “Free up memory” stopped the models and retained the transcript in the tab. |
+| Network and errors | 48 requests; zero non-GET/HEAD, external, inference API, or Quality-model requests; zero page or console errors, including CSP violations. |
+
+The CPU and GPU prompts differed; these timings do not establish a speedup ratio.
+This run initiated GPU OFF and then unloaded. The separate spoken test below
+waited for CPU restoration and verified another complete CPU reply. Evidence is
+`work/production-device-report.json` from `work/verify-production-device.mjs`.
+
+## Public spoken turn and completed GPU OFF
+
+A second fresh Chrome context used its **synthetic microphone** flags with the
+existing generated speech fixture: 8.525 seconds of mono 16 kHz PCM audio. The
+application used the real browser recorder, Whisper, Qwen, and Kokoro. The
+capture device was reported as “Fake Default Audio Input”; no physical microphone
+was opened. Automatic repeat listening and interruption were disabled to keep the
+test to one controlled spoken turn.
+
+| Check | Measured result |
+| --- | --- |
+| Capture | One synthetic microphone capture; the input meter registered audio and every captured track ended. |
+| Real transcription | “Hello! I am your three-dimensional avatar. My voice is generated locally, using only your CPU.” appeared after 11.702 seconds from recording start. |
+| Reply and playback | Fast Qwen repeated the fixture wording; actual Kokoro playback began after 14.914 seconds from recording start. This verifies the pipeline, not answer quality. |
+| GPU OFF completion | CPU became ready in 2.164 seconds, the switch was off, and the status explicitly confirmed GPU memory release. Fast remained selected. |
+| Reply after GPU OFF | A new typed request produced and spoke “Hello!” on CPU. |
+| Cleanup | Model unload completed, the transcript remained, and the isolated browser context closed. |
+| Network and errors | 53 requests; zero non-GET/HEAD, external, inference API, or Quality-model requests; zero page or console errors. |
+
+Evidence is `work/production-spoken-report.json` from
+`work/verify-production-spoken.mjs`; the report records the full runtime revision
+above. The fake-device test covers browser capture and the deployed spoken flow.
+It does not validate a person's microphone permission prompt, physical microphone
+hardware, acoustic echo cancellation, or noisy-room recognition.
+
+Public HTTP checks in `work/verify-milo-host.mjs` also verify asset availability,
+GGUF byte ranges, isolation headers, and rejection of inference API/POST requests.
+They explicitly require JavaScript MIME types for both ORT `.mjs` entry points:
+serving these modules as `application/octet-stream` prevents browser startup.
+The live revision includes that MIME correction and permits the locally embedded
+font data used by the compiled application. The HTTP report is
+`work/milo-host-verification.json`. The rejection probes contain no chat or audio
+data; they are separate from the browser request counts above.
 
 ## Real browser audio
 
@@ -96,7 +153,7 @@ different CPU and GPU prompts. The existing `connect-src 'self'` was sufficient;
 the test did not relax it to allow external or `blob:` fetches. Evidence was saved
 as `work/device-quality-report.json` by `work/verify-device-quality.mjs`.
 
-## Interface and remaining validation
+## Interface regression checks and remaining validation
 
 `tests/device-ui.spec.ts` passed six functional cases in 25.5 seconds, using the
 real consent UI, request adapter, transcript, and browser audio graph with
@@ -135,9 +192,11 @@ guards; GPU failure also clears the requested GPU state for explicit CPU retry.
 
 Still outside the evidence above:
 
-- Final public HTTPS deployment and exact released revision.
-- Actual microphone capture and a complete live spoken conversation on the
-  deployed site.
+- A person's physical microphone, its permission prompt, real acoustic echo
+  cancellation, and recognition in a noisy room. The public spoken flow used a
+  synthetic microphone fixture.
+- Public Quality-model inference: the actual five shards passed the isolated
+  production-CSP test above; the live browser journeys deliberately used Fast.
 - Safari, Firefox, macOS, Linux, iPhone, Android, low-memory devices, and private
   browsing/storage restrictions.
 - Full offline page reload: cached model reuse does not establish offline app
