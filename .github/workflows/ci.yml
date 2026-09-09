@@ -113,7 +113,11 @@ jobs:
             exit 0
           fi
           # The URL is a credential: never echo it or the response body.
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST --max-time 60 "$WEBHOOK")
+          # Dokploy's Git source validates the provider header and branch in the
+          # push payload. An empty POST is rejected with "Branch Not Match".
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST --max-time 60 \
+            -H 'Content-Type: application/json' -H 'X-GitHub-Event: push' \
+            --data-binary @"$GITHUB_EVENT_PATH" "$WEBHOOK")
           echo "Dokploy responded with HTTP $code."
           case "$code" in
             2*) echo "triggered=true" >> "$GITHUB_OUTPUT" ;;

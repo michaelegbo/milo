@@ -177,7 +177,12 @@ repository secret, `DOKPLOY_DEPLOY_WEBHOOK`, holding the webhook URL of the
 Dokploy `milo` service (Settings -> Secrets and variables -> Actions). Without
 that secret the job warns and does nothing, so pushes stay green until it is
 configured. Treat the URL as a credential: anyone holding it can trigger a
-deploy, and the workflow never prints it or the response body.
+deploy, and the workflow never prints it or the response body. Enable Autodeploy
+on the Dokploy service, keep its Git branch set to `main`, and let this workflow
+call the webhook after verification. The request includes GitHub's push header
+and event payload so Dokploy can validate the branch. An empty POST is rejected
+as `Branch Not Match`. A separate repository push webhook is unnecessary and
+would bypass the CI gate.
 
 The job then waits up to fifteen minutes for the site to serve the exact bundle
 filename that this commit produced. Vite names bundles by content, so that check
