@@ -138,8 +138,9 @@ that result. Phones and tablets can have tighter memory/storage limits; use Fast
 first and treat other browser/device combinations as unverified until tested.
 Audio uses CPU WebAssembly. Browser chat can use CPU WebAssembly or optional
 WebGPU where a compatible adapter and model offloading are confirmed; availability
-depends on the browser and device. A GPU initialization failure returns chat to
-the device's CPU, never to server inference. Test the GPU toggle on the target
+depends on the browser and device. If enabling acceleration fails, Milo attempts
+CPU recovery. A later GPU model failure stays visible; explicit reload uses the
+device's CPU. Neither path uses server inference. Test the GPU toggle on the target
 browser before claiming accelerated support. The downloadable local application's
 native GPU bridge is a separate feature.
 
