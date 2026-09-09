@@ -1,6 +1,7 @@
 import type { ChatMessage, ConversationMemory } from '../conversation-memory';
 import { clearStoredModels, holdModelStorage } from './model-storage';
 import { codexHealth, usesCodex } from '../reply-provider';
+import { checkHostedVoice, hostedVoiceStatus, usesHostedVoice } from '../voice-provider';
 
 export type DeviceProfile = 'fast' | 'quality' | 'hybrid';
 type AudioClient = (typeof import('./audio-client'))['deviceAudio'];
@@ -24,12 +25,19 @@ export function setDeviceProfile(profile: DeviceProfile) {
   window.dispatchEvent(new Event('milo-device-change'));
 }
 
+/** Whether Kokoro itself is loaded, regardless of the hosted voice. */
+export const deviceVoiceReady = () => voiceConsent && audio?.health().tts.status === 'ready';
+
 export function deviceHealth() {
   const voices = audio?.health() ?? { tts: unloaded, stt: unloaded };
   const mind = chat?.health();
   const approved = approvedProfiles.has(selectedProfile);
+  // The hosted voice needs no download: only the text Milo says leaves the device.
+  const tts = usesHostedVoice()
+    ? { ...voices.tts, status: 'ready', progress: 100, device: 'hosted', backend: 'deepgram', model: 'deepgram/aura-2', downloadBytes: 0, busy: false, hosted: true, message: 'Milo speaks with the hosted Deepgram voice. The on-device voice is optional.' }
+    : voices.tts;
   return {
-    tts: voices.tts, stt: voices.stt,
+    tts, stt: voices.stt,
     chat: usesCodex() ? codexHealth(selectedProfile) : { ...unloaded, ...mind, status: initializingProfile ? 'loading' : !approved ? 'unloaded' : mind?.status ?? 'unloaded',
       profile: selectedProfile, acceleration: mind?.acceleration ?? acceleration, residency: 'single',
       residencyReason: 'One reply model stays in memory. Hybrid loads the selected model when a turn needs it.' },
@@ -65,7 +73,8 @@ export async function initializeDevice(conversation: boolean, signal: AbortSigna
     if (!usesCodex()) chat ??= (await import('./chat-client')).deviceChat;
     signal.throwIfAborted();
     conversationConsent = true; approvedProfiles.add(profile);
-    await audio.initialize('both', { signal });
+    // With the hosted voice active, conversation needs only listening on the device.
+    await audio.initialize(usesHostedVoice() ? 'stt' : 'both', { signal });
     signal.throwIfAborted();
     if (!usesCodex()) await chat!.initialize({ profile, signal });
   }
@@ -106,6 +115,10 @@ export async function deviceRequest(path: string, init: RequestInit = {}): Promi
   const route = path.split('?')[0];
   const signal = init.signal ?? undefined;
   signal?.throwIfAborted();
+  if (route === '/api/health' || route === '/api/conversation/health') {
+    // First answer waits for the proxy check so the page never briefly asks for a download it does not need.
+    if (hostedVoiceStatus() === 'unknown') await checkHostedVoice(); else void checkHostedVoice();
+  }
   if (route === '/api/health') return json({ ...deviceHealth().tts, voices: ['am_michael', 'af_heart', 'bf_emma'] });
   if (route === '/api/conversation/health') return json(deviceHealth());
   const body = typeof init.body === 'string' ? JSON.parse(init.body) : init.body;

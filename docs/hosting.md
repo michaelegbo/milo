@@ -23,6 +23,28 @@ Nginx starts after its health check passes; both images carry the same source re
 Read the [ChatGPT guide](chatgpt-companion.md) for credentials, expiry, disconnect and admission limits.
 Do not copy the private account volume into public build artifacts or model directories.
 
+## Hosted voice service
+
+Milo's spoken voice is Deepgram Aura, reached only through the `voice` service in
+`compose.dokploy.yml` (`deploy/Dockerfile.voice`, `server/voice-hosted.mjs`). Nginx
+proxies `/api/voice/` to it on the Compose network, so the browser talks to Milo's
+own origin and the content security policy stays `connect-src 'self'`.
+
+Set `DEEPGRAM_API_KEY` in the Dokploy environment for the Compose service. The key
+is read by the `voice` container only; it is never written to the image, the
+repository or the browser. Without it the service reports `unconfigured`, and
+Milo speaks with the on-device Kokoro voice instead, so a missing or revoked key
+degrades to the previous behaviour rather than breaking speech. Rotate the key in
+the Deepgram console whenever it may have been exposed, then redeploy.
+
+The proxy accepts only `POST /api/voice/speak` with up to 600 characters of text
+and one of Milo's voice ids, rejects cross-site requests that browsers label, and
+limits each address to 60 requests and 60,000 characters per minute in front of
+Nginx's own `limit_req` on the location. It streams 24 kHz PCM back as Deepgram
+produces it and keeps finished clips in a 32 MB memory cache. It does not log text
+or upstream response bodies. Preset clips in `public/presets` are rendered with the
+same voices by `scripts/prepare-preset-audio.mjs` and committed with the site.
+
 ## Container and domain
 
 1. Create a Dokploy Docker Compose service using `compose.dokploy.yml` and this

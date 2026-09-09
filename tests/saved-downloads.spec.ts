@@ -3,6 +3,7 @@ test.use({baseURL:process.env.MILO_DEVICE_TEST_URL || 'http://127.0.0.1:5175'});
 test.skip(!process.env.MILO_DEVICE_TEST_URL, 'Device browser suite');
 
 test('saved files survive reload, show reuse, and detect deletion without a downloaded flag', async ({page},testInfo)=>{
+  await page.route('**/api/voice/health', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'unconfigured'})}));
   await page.goto('/');
   await page.evaluate(async()=>{
     const {AUDIO_FILES,audioFileUrl}=await import('/src/device/saved-downloads.ts' as string);
@@ -30,6 +31,7 @@ test('saved files survive reload, show reuse, and detect deletion without a down
 });
 
 test('real cache manager reuses complete Fast beside interrupted Quality and fetches only missing shards',async({page})=>{
+  await page.route('**/api/voice/health', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'unconfigured'})}));
   await page.goto('/');
   let gets=0;
   await page.route('**/models/chat/*.gguf',route=>{

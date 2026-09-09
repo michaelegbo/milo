@@ -1,7 +1,8 @@
-import { deleteDeviceModels, deviceHealth, initializeDevice, unloadDevice } from './transport';
+import { deleteDeviceModels, deviceHealth, deviceVoiceReady, initializeDevice, unloadDevice } from './transport';
 import { storedModels } from './model-storage';
 import { inspectSavedDownloads, type SavedDownloads } from './saved-downloads';
 import { usesCodex } from '../reply-provider';
+import { usesHostedVoice } from '../voice-provider';
 
 /** Consent and recovery live beside the studio, before any model is requested. */
 export function createDevicePanel(container: HTMLElement, onStop: () => void) {
@@ -37,25 +38,29 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
   function describeSaved(): 'all' | 'some' | 'none' | 'unknown' {
     if (!saved) return 'unknown';
     const profile = deviceHealth().chat.profile;
-    const needed = conversation ? usesCodex() ? ['tts', 'stt'] as const : ['tts', 'stt', profile === 'quality' ? 'quality' : 'fast'] as const : ['tts'] as const;
+    const needed = (conversation ? usesCodex() ? ['tts', 'stt'] : ['tts', 'stt', profile === 'quality' ? 'quality' : 'fast'] : ['tts']).filter(key => key !== 'tts' || !usesHostedVoice()) as ('tts' | 'stt' | 'fast' | 'quality')[];
+    if (!needed.length) return 'none';
     return needed.every(key => saved![key].ready) ? 'all' : needed.some(key => saved![key].found > 0) ? 'some' : 'none';
   }
 
   function render() {
     const health = deviceHealth();
     const profile = health.chat.profile;
-    const engines = conversation ? usesCodex() ? [['Voice', health.tts], ['Listening', health.stt]] as const : [['Voice', health.tts], ['Listening', health.stt], ['Replies', health.chat]] as const : [['Voice', health.tts]] as const;
+    const hosted = usesHostedVoice();
+    const engines = (conversation ? usesCodex() ? [['Voice', health.tts], ['Listening', health.stt]] : [['Voice', health.tts], ['Listening', health.stt], ['Replies', health.chat]] : [['Voice', health.tts]]).filter(([name]) => name !== 'Voice' || !hosted) as [string, { status: string; progress?: number | null; message?: string }][];
     const ready = engines.every(([, value]) => value.status === 'ready');
     const active = engines.some(([, value]) => value.status !== 'unloaded');
     const failed = engines.find(([, value]) => value.status === 'error');
     const loading = engines.find(([, value]) => value.status === 'loading');
     el('device-setup-description').textContent = conversation ? profile === 'hybrid' ? 'Simple turns stay quick. Deeper questions load the stronger model on this device.' : profile === 'quality' ? 'Make room for Milo’s larger reply model. This can be demanding on smaller devices.' : 'Download Milo’s voice, ears, and quick replies to chat right here.' : 'Download the voice once, then let Milo do the talking.';
-    el('device-download-size').textContent = conversation ? profile === 'fast' ? 'About 1.3 GB total on first use' : profile === 'hybrid' ? 'About 1.3 GB to start · up to 3.8 GB with deeper replies' : 'About 2.7 GB total on first use' : 'About 92 MB on first use';
+    el('device-download-size').textContent = conversation ? profile === 'fast' ? hosted ? 'About 1.2 GB total on first use' : 'About 1.3 GB total on first use' : profile === 'hybrid' ? hosted ? 'About 1.2 GB to start · up to 3.7 GB with deeper replies' : 'About 1.3 GB to start · up to 3.8 GB with deeper replies' : hosted ? 'About 2.6 GB total on first use' : 'About 2.7 GB total on first use' : hosted ? 'No download needed · voice streams from Deepgram' : 'About 92 MB on first use';
     if (conversation && usesCodex()) {
       el('device-setup-description').textContent = 'Prepare Milo’s voice and listening here. Your ChatGPT account provides the replies.';
-      el('device-download-size').textContent = 'About 172 MB total · no local reply model needed';
+      el('device-download-size').textContent = hosted ? 'About 80 MB total · listening only' : 'About 172 MB total · no local reply model needed';
     }
-    container.querySelector('.device-privacy')!.textContent = usesCodex() ? 'Voice recordings stay on your device. Messages and conversation context go to OpenAI through Milo for ChatGPT replies.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
+    container.querySelector('.device-privacy')!.textContent = usesCodex()
+      ? hosted ? 'Voice recordings stay on your device. Messages go to OpenAI for replies, and the text Milo says goes to Deepgram for its voice.' : 'Voice recordings stay on your device. Messages and conversation context go to OpenAI through Milo for ChatGPT replies.'
+      : hosted ? 'Your voice recordings and replies stay in this browser. Only the text Milo says is sent to Deepgram to make its voice.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
     const savedState = describeSaved();
     const allSaved = savedState === 'all', someSaved = savedState === 'some';
     if (allSaved) {
@@ -70,6 +75,15 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     const start = el<HTMLButtonElement>('device-start');
     start.textContent = preparing || loading ? 'Preparing on your device…' : ready ? 'Ready on this device ✓' : error || failed ? 'Try loading again ↘' : checking && !saved ? 'Checking saved downloads…' : allSaved ? conversation ? 'Start saved conversation ↘' : 'Start saved voice ↘' : someSaved ? 'Download missing files & start ↘' : conversation ? 'Download & start conversation ↘' : 'Download & start voice ↘';
     start.disabled = (checking && !saved) || deleting || !supported || !!preparing || !!loading || ready;
+    // The studio already speaks through Deepgram; Kokoro stays available as an optional fallback for offline use.
+    const optionalVoice = !conversation && hosted && supported && !preparing && !loading && !failed && !error;
+    if (optionalVoice) {
+      const loaded = deviceVoiceReady();
+      el('device-setup-description').textContent = 'Milo’s voice streams from Deepgram, so the studio needs no download. Conversation prepares listening and replies on this device.';
+      el('device-download-size').textContent = loaded ? 'On-device voice loaded as a fallback · no download needed' : `No download needed · optional on-device voice${saved?.tts.ready ? ' is saved here' : ' is about 92 MB'}`;
+      start.textContent = loaded ? 'On-device voice ready ✓' : saved?.tts.ready ? 'Load on-device voice ↘' : 'Download on-device voice ↘';
+      start.disabled = loaded || deleting || (checking && !saved);
+    }
     el<HTMLButtonElement>('device-delete').disabled = deleting;
     const unload = el<HTMLButtonElement>('device-unload');
     unload.hidden = !preparing && !active;
@@ -80,7 +94,7 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     container.dataset.state = error || failed || !supported ? 'error' : preparing || loading ? 'loading' : ready ? 'ready' : 'unloaded';
     const progress = el<HTMLProgressElement>('device-progress');
     progress.hidden = !preparing && !loading;
-    if (loading && Number.isFinite(loading[1].progress)) progress.value = loading[1].progress!;
+    if (loading && Number.isFinite(loading[1].progress)) progress.value = loading[1].progress as number;
     else progress.removeAttribute('value');
     el('device-capability').textContent = capability + quota;
   }
@@ -148,6 +162,7 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
   const onProvider = () => { preparing?.abort(); preparing = undefined; error = ''; notice = ''; render(); };
   window.addEventListener('milo-provider-change', onProvider);
   window.addEventListener('milo-device-change', render);
+  window.addEventListener('milo-voice-change', render);
   render(); void checkSaved();
   return {
     setConversation(value: boolean) { conversation = value; error = ''; render(); },
@@ -156,6 +171,6 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     describe() {
       return { supported, capability: supported ? '' : capability, saved: describeSaved(), busy: !!preparing || deleting || (checking && !saved), size: el('device-download-size').textContent || '' };
     },
-    dispose() { disposed = true; window.removeEventListener('focus', onFocus); preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
+    dispose() { disposed = true; window.removeEventListener('focus', onFocus); preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-voice-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
   };
 }

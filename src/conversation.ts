@@ -1,6 +1,7 @@
 import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
 import { codexStatus, usesCodex } from './reply-provider';
+import { usesHostedVoice, voiceLabel } from './voice-provider';
 import { createCodexPanel } from './codex-panel';
 import { MicrophoneRecorder } from './microphone';
 import type { SpeechPlayer } from './speech';
@@ -77,6 +78,7 @@ export function createConversation(options: {
     const modeSelect = el<HTMLSelectElement>('conversation-model');
     modeSelect.options[0].text = remote ? 'Fast · Less thought' : 'Fast · Qwen 1.5B';
     modeSelect.options[1].text = remote ? 'Better answers · More thought' : 'Better answers · Qwen 4B';
+    for (const option of el<HTMLSelectElement>('conversation-voice').options) option.text = voiceLabel(option.value).split(' · ')[0];
     const start = el<HTMLButtonElement>('conversation-start');
     start.textContent = state === 'listening' ? 'Send voice message' : ['transcribing', 'thinking', 'voicing'].includes(state) ? `${labels[state]}…` : micMuted ? 'Unmute & talk' : state === 'speaking' ? 'Interrupt & talk' : 'Start conversation';
     start.disabled = micAccessBusy || (state !== 'listening' && (!voiceReady() || ['transcribing', 'thinking', 'voicing'].includes(state)));
@@ -87,12 +89,12 @@ export function createConversation(options: {
     el('model-hint').title = profile === 'hybrid' ? health?.chat.residencyReason || 'Both local models are prepared when memory allows. First use downloads 3.6 GB in total.' : '';
     if (isDeviceOnly) {
       (container.querySelector('.conversation-acceleration') as HTMLElement).hidden = !health?.chat.acceleration?.available && !health?.chat.acceleration?.enabled;
-      (container.querySelector('.conversation-note') as HTMLElement).textContent = `English voice · AI stays in this browser · ${health?.chat.device === 'gpu' ? 'GPU replies' : 'CPU'}`;
+      (container.querySelector('.conversation-note') as HTMLElement).textContent = usesHostedVoice() ? `Voice by Deepgram · listening and replies stay in this browser · ${health?.chat.device === 'gpu' ? 'GPU replies' : 'CPU'}` : `English voice · AI stays in this browser · ${health?.chat.device === 'gpu' ? 'GPU replies' : 'CPU'}`;
       if (profile === 'hybrid') el('model-hint').textContent = 'Adapts each reply. One model is loaded at a time.';
     }
     if (remote) {
       (container.querySelector('.conversation-acceleration') as HTMLElement).hidden = true;
-      (container.querySelector('.conversation-note') as HTMLElement).textContent = 'Voice on your device · Replies through your ChatGPT account';
+      (container.querySelector('.conversation-note') as HTMLElement).textContent = usesHostedVoice() ? 'Listening on your device · Replies through ChatGPT · Voice by Deepgram' : 'Voice on your device · Replies through your ChatGPT account';
       el('model-hint').textContent = profile === 'hybrid' ? 'Adjusts thinking effort for each reply using your selected ChatGPT model.' : profile === 'fast' ? 'Uses a lighter supported thinking effort.' : 'Uses a deeper supported thinking effort.';
       el('model-hint').title = 'ChatGPT replies use your account allowance. Local GPU acceleration does not apply.';
     }
@@ -125,10 +127,10 @@ export function createConversation(options: {
     el('mic-toggle-label').textContent = micMuted ? 'Unmute mic' : 'Mute mic';
     el('mic-state').textContent = micMuted ? 'Mic muted' : monitoring ? 'Listening for interruption' : state === 'listening' ? micLive ? 'Listening' : 'Waiting for permission' : ['transcribing', 'thinking', 'voicing', 'speaking'].includes(state) ? 'Mic paused' : 'Mic idle';
     el('conversation-engines').textContent = healthError || (!health ? 'Connecting to your local engines…' : [
-      ['Whisper', health.stt], [remote ? 'ChatGPT' : (health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], ['Kokoro', health.tts],
+      ['Whisper', health.stt], [remote ? 'ChatGPT' : (health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], [usesHostedVoice() ? 'Deepgram voice' : 'Kokoro', health.tts],
     ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'unloaded' ? 'not loaded' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
     el('conversation-engines').title = 'All inference stays on this computer. Conversation replies can use the GPU; listening and speech use CPU. Models are cached for later use.';
-    if (isDeviceOnly) el('conversation-engines').title = 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. The step above prepares them. No server fallback.';
+    if (isDeviceOnly) el('conversation-engines').title = usesHostedVoice() ? 'Listening and replies run in this browser; compatible browsers accelerate replies with the GPU. Milo’s voice is made by Deepgram from the text it says.' : 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. The step above prepares them. No server fallback.';
     if (remote) el('conversation-engines').title = 'Voice and listening stay on this device. Messages and conversation context are sent to OpenAI through Milo’s hosted connection.';
     const emptyNote = container.querySelector<HTMLElement>('.conversation-empty > span:last-child');
     if (emptyNote) emptyNote.textContent = remote ? 'ChatGPT receives this conversation’s text.' : 'Your conversation stays in this tab.';
@@ -162,7 +164,7 @@ export function createConversation(options: {
       const text = remote ? 'Prepare Milo’s voice and listening on this device. Your ChatGPT account provides the replies.'
         : device.saved === 'all' ? 'Your models are already saved in this browser. Load them to start talking; nothing downloads again.'
           : device.saved === 'some' ? 'Some files are already saved here. Milo downloads only what is missing, then starts.'
-            : 'Milo needs its voice, listening and reply models on this device. Nothing you say leaves this browser.';
+            : usesHostedVoice() ? 'Milo needs its listening and reply models on this device. Your recordings and replies stay in this browser; only the text Milo says goes to Deepgram for its voice.' : 'Milo needs its voice, listening and reply models on this device. Nothing you say leaves this browser.';
       step = { text: `${text} ${device.size}.`, action: device.saved === 'all' ? 'Load saved models ↘' : device.saved === 'some' ? 'Download missing files & prepare ↘' : 'Download & prepare ↘', run: options.device!.start, busy: device.busy };
     }
     nextAction = step?.run;
@@ -544,6 +546,7 @@ export function createConversation(options: {
   window.addEventListener('milo-provider-change', onProviderChange);
   const onDeviceHealth = () => { if (isDeviceOnly) void checkHealth(); };
   if (isDeviceOnly) window.addEventListener('milo-device-change', onDeviceHealth);
+  window.addEventListener('milo-voice-change', render);
   return {
     get label() { return state === 'thinking' && replyRoute?.profile === 'quality' && profile === 'hybrid' ? 'Thinking deeper' : labels[state]; }, get state() { return state; },
     get presenceState(): State { return state === 'listening' && !micLive ? 'idle' : state; },
@@ -555,6 +558,6 @@ export function createConversation(options: {
       else { cancelMicAccess(); end(); }
     },
     cancel: end,
-    dispose() { disposed = true; visible = false; cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+    dispose() { disposed = true; visible = false; cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); window.removeEventListener('milo-voice-change', render); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
   };
 }

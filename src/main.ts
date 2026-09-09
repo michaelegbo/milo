@@ -5,6 +5,7 @@ import './style.css';
 import { createAvatar, type AvatarPresence } from './avatar';
 import { SpeechPlayer, splitSpeechText } from './speech';
 import { presets, presetClipPath } from './presets';
+import { usesHostedVoice, voiceLabel } from './voice-provider';
 import { createConversation } from './conversation';
 import { inferUtteranceMood } from './utterance-mood';
 
@@ -44,7 +45,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="header">
     <a class="brand" href="/" aria-label="Milo home"><span class="brand-symbol"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 17V7l9 8 9-8v10" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>milo<span class="brand-period">.</span></span></a>
     <nav aria-label="Main navigation"><span class="nav-active" aria-current="page">Avatar studio</span><button id="about-button">Behind the voice ${icon('arrow')}</button></nav>
-    <div class="local-label"><span class="status-dot"></span> ${isDeviceOnly ? 'Voice on your device' : 'Made to run locally'}</div>
+    <div class="local-label"><span class="status-dot"></span> <span id="local-label-text">${isDeviceOnly ? 'Voice on your device' : 'Made to run locally'}</span></div>
   </header>
   <main>
     <section class="intro" aria-labelledby="page-title"><div><div class="eyebrow">A LITTLE EXPERIMENT IN EXPRESSION</div><h1 id="page-title">Give a little character a voice<span>.</span></h1><p>Choose the words. Milo will do the talking.</p>${isDeviceOnly ? `<div class="device-source-links"><a href="${MILO_REPOSITORY}" target="_blank" rel="noreferrer">View source ${icon('arrow')}</a><a href="${MILO_REPOSITORY}/archive/refs/heads/main.zip">Download Milo ${icon('download')}</a><span>Free for personal, noncommercial use</span></div>` : ''}</div><span class="edition">STUDIO / 001</span></section>
@@ -108,7 +109,7 @@ const devicePanel = isDeviceOnly ? createDevicePanel(el('device-setup'), () => {
 if (isDeviceOnly) {
   document.body.dataset.deployment = 'device';
   const note = document.querySelector<HTMLElement>('.about-note')!;
-  note.textContent = 'Milo starts with on-device replies. Models download only after you choose Download & start. Voice and listening run on your CPU; compatible browsers can accelerate local replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through Milo’s hosted connection, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Providers never switch automatically.';
+  note.textContent = 'Milo’s voice is made by Deepgram from the text Milo says, streamed through Milo’s own server so no key reaches your browser; when that service is unavailable, the on-device Kokoro voice takes over. Listening and replies run on your device: models download only after you choose Download & start, and compatible browsers can accelerate replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through Milo’s hosted connection, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Reply providers never switch automatically.';
   el('retry').textContent = 'Open model setup';
 }
 
@@ -123,7 +124,12 @@ function renderSettings() {
   el('sentence-text').textContent = presets[settings.selected].text;
   el<HTMLTextAreaElement>('custom-text').value = settings.custom;
   el('char-count').textContent = `${settings.custom.length} / 600`;
+  for (const option of el<HTMLSelectElement>('voice').options) option.text = voiceLabel(option.value);
   el<HTMLSelectElement>('voice').value = settings.voice;
+  // Deepgram voices have no pace control; the slider keeps applying to the on-device voice.
+  el<HTMLInputElement>('speed').disabled = usesHostedVoice();
+  el<HTMLInputElement>('speed').title = usesHostedVoice() ? 'Pace applies to the on-device voice. The hosted voice speaks at its natural pace.' : '';
+  if (isDeviceOnly) el('local-label-text').textContent = usesHostedVoice() ? 'Voice by Deepgram · listening and replies on your device' : 'Voice on your device';
   el<HTMLInputElement>('speed').value = String(settings.speed);
   el('speed-value').textContent = `${settings.speed.toFixed(1)}×`;
   el<HTMLInputElement>('motion').checked = settings.motion;
@@ -138,7 +144,7 @@ function renderPlayback() {
   const busy = state === 'generating';
   const speaking = state === 'playing';
   const paused = state === 'paused';
-  const presetAvailable = settings.mode === 'presets' && settings.speed === 1;
+  const presetAvailable = settings.mode === 'presets' && (settings.speed === 1 || usesHostedVoice());
   const speak = el<HTMLButtonElement>('speak');
   speak.innerHTML = `${icon(speaking ? 'pause' : busy ? 'wave' : 'play')}<span>${speaking ? 'Pause Milo' : paused ? 'Keep talking' : busy ? 'Finding Milo’s voice…' : 'Let Milo speak'}</span>`;
   speak.disabled = busy || (!speaking && !paused && ((!presetAvailable && health !== 'ready') || !currentText()));
@@ -152,7 +158,7 @@ function renderPlayback() {
   let status = health === 'ready' ? 'All set. Press play and meet your voice.' : health === 'loading' ? 'Preparing the voice. The first download can take a few minutes.' : health === 'error' ? healthMessage : 'Connecting to the local voice…';
   if (isDeviceOnly && health === 'unloaded') status = 'Choose Download & start voice above. Your words stay on this device.';
   if (presetAvailable) status = 'Press play to hear this sentence. No voice model download needed.';
-  if (busy) status = presetAvailable ? 'Opening Milo’s voice…' : 'Making your sentence on the CPU. The first one can take a little longer.';
+  if (busy) status = presetAvailable ? 'Opening Milo’s voice…' : usesHostedVoice() ? 'Making your sentence…' : 'Making your sentence on the CPU. The first one can take a little longer.';
   if (speaking) status = 'Milo is speaking. The mouth moves with the sound.';
   if (paused) status = 'Paused. Continue whenever you’re ready.';
   if (state === 'error') status = player.error;
@@ -162,7 +168,7 @@ function renderPlayback() {
   el('retry').hidden = health !== 'error';
   el('track-title').textContent = busy ? 'A little voice in the making…' : player.hasAudio ? activeTitle : 'A voice waiting to happen';
   el('track-caption').textContent = player.hasAudio ? activeText : 'Your next little moment starts above.';
-  el('engine-label').textContent = `Kokoro voice · ${health === 'ready' ? isDeviceOnly ? 'Browser CPU ready' : 'CPU ready' : health === 'unloaded' ? 'Not loaded' : health === 'loading' ? 'Preparing' : health === 'error' ? 'Offline' : 'Connecting'}`;
+  el('engine-label').textContent = usesHostedVoice() ? 'Deepgram voice · Ready' : `Kokoro voice · ${health === 'ready' ? isDeviceOnly ? 'Browser CPU ready' : 'CPU ready' : health === 'unloaded' ? 'Not loaded' : health === 'loading' ? 'Preparing' : health === 'error' ? 'Offline' : 'Connecting'}`;
   el('engine-dot').className = `status-dot ${health === 'ready' ? '' : health === 'error' ? 'offline' : 'loading'}`;
 }
 player.onChange = () => { renderPlayback(); conversation?.onPlaybackChange(); };
@@ -228,7 +234,8 @@ el('speak').addEventListener('click', () => {
 });
 /** Presets at normal pace play a pre-rendered clip instantly; everything else streams from the voice engine sentence by sentence. */
 async function speakStudio() {
-  const { voice, speed, mode, selected } = settings;
+  const { voice, mode, selected } = settings;
+  const speed = usesHostedVoice() ? 1 : settings.speed;
   if (mode === 'presets' && speed === 1 && await player.speakClip(presetClipPath(selected, voice))) return;
   if (health !== 'ready') {
     player.stop();
@@ -263,6 +270,7 @@ async function checkHealth() {
 }
 el('retry').addEventListener('click', () => { if (isDeviceOnly) { el('device-setup').scrollIntoView({ block: 'center' }); el('device-start').focus(); } else void checkHealth(); });
 if (isDeviceOnly) window.addEventListener('milo-device-change', () => void checkHealth());
+window.addEventListener('milo-voice-change', () => { renderSettings(); void checkHealth(); });
 const healthTimer = window.setInterval(() => void checkHealth(), 5000);
 let animationFrame = 0;
 function updateTrack() {

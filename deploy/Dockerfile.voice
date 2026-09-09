@@ -1,0 +1,15 @@
+FROM node:24.20.0-bookworm-slim@sha256:6642ef280aebc09c4541bee0b15c9f89f0f3f3c247ddee79ae1d37eddfdcbbaa
+WORKDIR /app
+# Outbound HTTPS to Deepgram needs the system certificate bundle.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY --chown=node:node server/voice-hosted.mjs ./server/
+ARG MILO_BUILD_REVISION=unknown
+LABEL org.opencontainers.image.revision="${MILO_BUILD_REVISION}"
+# DEEPGRAM_API_KEY is supplied by the deployment environment, never baked in.
+ENV NODE_ENV=production MILO_VOICE_HOST=0.0.0.0 MILO_VOICE_PORT=8792
+USER node
+EXPOSE 8792
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD node -e "fetch('http://127.0.0.1:8792/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+CMD ["node", "server/voice-hosted.mjs"]

@@ -1,6 +1,7 @@
 import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
 import { encodeWav, resampleAudio } from './microphone';
+import { PCM_TYPE } from './voice-provider';
 export type PlaybackState = 'idle' | 'generating' | 'playing' | 'paused' | 'error';
 
 /** Sentence-sized chunks with a short opening chunk, so playback starts before the rest is generated. */
@@ -42,7 +43,7 @@ export class SpeechPlayer {
   private generation = 0;
   private started = 0;
   private offset = 0;
-  private wav?: Blob;
+  private exported?: Blob;
   private streamOpen = false;
   onChange: () => void = () => {};
 
@@ -51,7 +52,7 @@ export class SpeechPlayer {
       ? this.offset + this.context.currentTime - this.started : this.offset);
   }
 
-  get hasAudio() { return !!this.wav; }
+  get hasAudio() { return !!this.buffer && this.duration > 0; }
 
   private static waveformOf(samples: Float32Array) {
     const step = Math.max(1, Math.floor(samples.length / 64));
@@ -62,12 +63,34 @@ export class SpeechPlayer {
     });
   }
 
-  /** Take a decoded clip as the current audio, with a WAV copy ready for download. */
+  /** Take a decoded clip as the current audio. */
   private adopt(buffer: AudioBuffer) {
-    const samples = buffer.getChannelData(0);
     this.buffer = buffer; this.duration = buffer.duration;
-    this.wav = encodeWav(resampleAudio(samples, buffer.sampleRate, 24000), 24000);
-    this.waveform = SpeechPlayer.waveformOf(samples);
+    this.waveform = SpeechPlayer.waveformOf(buffer.getChannelData(0));
+    this.exported = undefined;
+  }
+
+  /** Append samples to the current audio and start playing if nothing is playing. */
+  private append(samples: Float32Array, sampleRate: number) {
+    const previous = this.buffer;
+    const rate = previous?.sampleRate ?? sampleRate;
+    const added = rate === sampleRate ? samples : resampleAudio(samples, sampleRate, rate);
+    const combined = this.context!.createBuffer(1, (previous?.length ?? 0) + added.length, rate);
+    const all = combined.getChannelData(0);
+    if (previous) all.set(previous.getChannelData(0));
+    all.set(added, previous?.length ?? 0);
+    this.buffer = combined; this.duration = combined.duration;
+    this.waveform = SpeechPlayer.waveformOf(all);
+    this.exported = undefined;
+    if (!this.source && this.state !== 'paused') this.play();
+    else this.onChange();
+  }
+
+  private appendPcm(bytes: Uint8Array) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const samples = new Float32Array(bytes.byteLength / 2);
+    for (let i = 0; i < samples.length; i++) samples[i] = view.getInt16(i * 2, true) / 32768;
+    this.append(samples, 24000);
   }
 
   /** Play a pre-rendered clip. Resolves false when it is unavailable so the caller can generate instead. */
@@ -136,9 +159,9 @@ export class SpeechPlayer {
       const wav = await response.blob();
       const buffer = await this.context!.decodeAudioData(await wav.arrayBuffer());
       if (id !== this.generation) return;
-      this.wav = wav;
       this.buffer = buffer;
       this.duration = buffer.duration;
+      this.exported = undefined;
       const data = buffer.getChannelData(0);
       const step = Math.max(1, Math.floor(data.length / 64));
       this.waveform = Array.from({ length: 64 }, (_, i) => {
@@ -207,23 +230,31 @@ export class SpeechPlayer {
           const body = await response.json().catch(() => ({}));
           throw new Error(body.message || 'The next part could not be spoken. Please try again.');
         }
-        const chunk = await this.context!.decodeAudioData(await response.arrayBuffer());
-        if (id !== this.generation) return;
-        const previous = this.buffer;
-        const combined = this.context!.createBuffer(1, (previous?.length ?? 0) + chunk.length, chunk.sampleRate);
-        const samples = combined.getChannelData(0);
-        if (previous) samples.set(previous.getChannelData(0));
-        samples.set(chunk.getChannelData(0), previous?.length ?? 0);
-        this.buffer = combined; this.duration = combined.duration;
-        this.wav = encodeWav(resampleAudio(samples, combined.sampleRate, 24000), 24000);
-        this.waveform = Array.from({ length: 64 }, (_, i) => {
-          const step = Math.max(1, Math.floor(samples.length / 64));
-          let energy = 0, count = 0;
-          for (let j = i * step; j < Math.min((i + 1) * step, samples.length); j += 12) { energy += samples[j] ** 2; count++; }
-          return Math.max(0.06, Math.min(1, Math.sqrt(energy / Math.max(1, count)) * 6));
-        });
-        if (!this.source && (this.state as PlaybackState) !== 'paused') this.play();
-        else this.onChange();
+        if ((response.headers.get('content-type') || '').startsWith(PCM_TYPE) && response.body) {
+          // 16-bit little-endian mono at 24 kHz, appended as it streams in, so the
+          // first words play while the rest of the sentence is still being made.
+          const reader = response.body.getReader();
+          let carry = new Uint8Array(0);
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (id !== this.generation) return;
+              if (value?.length) {
+                const bytes = new Uint8Array(carry.length + value.length);
+                bytes.set(carry); bytes.set(value, carry.length);
+                const usable = bytes.length - bytes.length % 2;
+                if (usable >= 9600 || done) { this.appendPcm(bytes.subarray(0, usable)); carry = bytes.slice(usable); }
+                else carry = bytes;
+              }
+              if (done) break;
+            }
+            if (carry.length >= 2) this.appendPcm(carry.subarray(0, carry.length - carry.length % 2));
+          } finally { reader.releaseLock(); }
+        } else {
+          const chunk = await this.context!.decodeAudioData(await response.arrayBuffer());
+          if (id !== this.generation) return;
+          this.append(chunk.getChannelData(0), chunk.sampleRate);
+        }
       }
       if (id !== this.generation) return;
       this.streamOpen = false;
@@ -278,7 +309,7 @@ export class SpeechPlayer {
     this.offset = 0;
     this.state = 'idle';
     this.error = '';
-    if (clear) { this.wav = undefined; this.buffer = undefined; this.duration = 0; this.waveform = Array(64).fill(0.08); }
+    if (clear) { this.exported = undefined; this.buffer = undefined; this.duration = 0; this.waveform = Array(64).fill(0.08); }
     this.onChange();
   }
 
@@ -298,9 +329,16 @@ export class SpeechPlayer {
     return { level: Math.min(1, Math.sqrt(energy / this.samples.length) * 4.5), bands, speaking: true };
   }
 
+  /** Encode the current audio as 24 kHz mono WAV on demand, once per clip. */
+  exportWav(): Blob | undefined {
+    if (!this.buffer || !this.duration) return undefined;
+    return this.exported ??= encodeWav(resampleAudio(this.buffer.getChannelData(0), this.buffer.sampleRate, 24000), 24000);
+  }
+
   download() {
-    if (!this.wav) return;
-    const url = URL.createObjectURL(this.wav);
+    const wav = this.exportWav();
+    if (!wav) return;
+    const url = URL.createObjectURL(wav);
     const a = document.createElement('a');
     a.href = url; a.download = 'milo-speech.wav'; a.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 10_000);

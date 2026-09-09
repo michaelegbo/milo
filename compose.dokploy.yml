@@ -9,6 +9,8 @@ services:
     depends_on:
       codex:
         condition: service_healthy
+      voice:
+        condition: service_healthy
     expose:
       - "8080"
     volumes:
@@ -50,6 +52,35 @@ services:
     mem_limit: 2g
     memswap_limit: 2g
     pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+  voice:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.voice
+      args:
+        MILO_BUILD_REVISION: ${MILO_BUILD_REVISION:?Set the source commit SHA}
+    image: milo-voice:${MILO_BUILD_REVISION:?Set the source commit SHA}
+    restart: unless-stopped
+    environment:
+      # Optional. Without it the proxy reports "unconfigured" and Milo speaks with the on-device voice.
+      DEEPGRAM_API_KEY: ${DEEPGRAM_API_KEY:-}
+    expose:
+      - "8792"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cpus: "0.5"
+    mem_limit: 192m
+    memswap_limit: 192m
+    pids_limit: 64
     security_opt:
       - no-new-privileges:true
     cap_drop:

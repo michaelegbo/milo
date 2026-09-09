@@ -6,8 +6,9 @@ import { readFile } from 'node:fs/promises';
 test.use({ baseURL: process.env.MILO_DEVICE_TEST_URL || 'http://127.0.0.1:5175' });
 test.skip(!process.env.MILO_DEVICE_TEST_URL, 'Set MILO_DEVICE_TEST_URL for the separate device-only UI suite.');
 
-async function setup(page: Page, unsupported = false) {
+async function setup(page: Page, unsupported = false, hostedVoice: 'unconfigured' | 'ready' = 'unconfigured') {
   const requests: string[] = [], errors: string[] = [];
+  await page.route('**/api/voice/health', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: hostedVoice, provider: 'deepgram', voices: ['am_michael', 'af_heart', 'bf_emma'] }) }));
   page.on('request', request => requests.push(request.url()));
   page.on('pageerror', error => errors.push(error.message));
   const source = await readFile(new URL('./fixtures/microphone.wav', import.meta.url));
@@ -97,7 +98,8 @@ async function setup(page: Page, unsupported = false) {
 }
 
 function expectPrivate(requests: string[]) {
-  expect(requests.filter(url => new URL(url).pathname.startsWith('/api/'))).toEqual([]);
+  // Only the hosted-voice probe may reach the origin's API; every inference route stays on the device.
+  expect(requests.filter(url => new URL(url).pathname.startsWith('/api/') && !new URL(url).pathname.startsWith('/api/voice/'))).toEqual([]);
   expect(requests.filter(url => new URL(url).port === '8790')).toEqual([]);
 }
 
@@ -235,7 +237,10 @@ test('ChatGPT device sign-in supports new codes, cancellation, failures and priv
 test('device landing requests no models or API before consent and plays local speech at desktop and mobile sizes', async ({ page }, testInfo) => {
   const { requests, errors } = await setup(page);
   await expect(page.locator('.device-privacy')).toContainText('stay in this browser');
-  await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeDisabled();
+  // Presets are pre-rendered clips, so they play before any model download; the engine itself stays unloaded.
+  await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
+  await expect(page.locator('#speech-status')).toContainText('No voice model download needed');
+  await expect(page.locator('#engine-label')).toContainText('Not loaded');
   await expect(page.getByRole('link', { name: 'View source' })).toHaveAttribute('href', 'https://github.com/michaelegbo/milo');
   await page.waitForTimeout(800);
   expect(requests.filter(url => /audio-client|chat-client|\.gguf|\.onnx|\.wasm/.test(url))).toEqual([]);
@@ -251,7 +256,7 @@ test('device landing requests no models or API before consent and plays local sp
   await expect.poll(() => page.evaluate(() => (window as any).__device.starts)).toBe(1);
   await expect(page.locator('#speech-status')).toContainText('That’s a wrap');
   await page.getByRole('button', { name: 'Free up memory' }).click();
-  await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeDisabled();
+  await expect(page.locator('#engine-label')).toContainText('Not loaded');
   expect(await page.evaluate(() => (window as any).__device.micCalls)).toBe(0);
   expectPrivate(requests); expect(errors).toEqual([]);
 });
@@ -398,9 +403,9 @@ test('deletion stops an in-progress preparation and permits an explicit restart'
   await page.getByRole('button', { name: 'Delete models', exact: true }).click();
   await expect(page.locator('#device-status')).toContainText('Downloaded models deleted');
   await page.evaluate(() => { const state = (window as any).__device; state.holdInitialize = false; state.releaseInitialize?.(); });
-  await expect(page.locator('#speak')).toBeDisabled();
+  await expect(page.locator('#engine-label')).toContainText('Not loaded');
   await page.getByRole('button', { name: /Download & start voice/ }).click();
-  await expect(page.locator('#speak')).toBeEnabled();
+  await expect(page.locator('#engine-label')).toContainText('ready');
 });
 
 test('another tab protects shared model storage until its engines are released', async ({ page, context }) => {
@@ -486,11 +491,14 @@ test('the real unloaded device page displays consent before any model request at
   const requests: string[] = [], errors: string[] = [];
   page.on('request', request => requests.push(request.url()));
   page.on('pageerror', error => errors.push(error.message));
-  // No routes, fake workers, fake inference, or capability overrides in this test.
+  // No fake workers, fake inference, or capability overrides in this test. The hosted voice is pinned to
+  // unconfigured so the result does not depend on whether a Deepgram proxy happens to be running.
+  await page.route('**/api/voice/health', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'unconfigured' }) }));
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-deployment', 'device');
   await expect(page.locator('#device-start')).toBeEnabled();
-  await expect(page.locator('#speech-status')).toContainText('Download & start');
+  await expect(page.locator('#speech-status')).toContainText('No voice model download needed');
+  await expect(page.locator('#engine-label')).toContainText('Not loaded');
   await expect(page.locator('#avatar-canvas canvas')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('milo-device-desktop-real.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -500,5 +508,36 @@ test('the real unloaded device page displays consent before any model request at
   await expect(page.locator('#conversation-start')).toBeDisabled();
   await expect(page.locator('#conversation-engines')).toContainText('not loaded');
   expect(requests.filter(url => /audio-client|chat-client|\.gguf|\.onnx|\.wasm/.test(url))).toEqual([]);
+  expectPrivate(requests); expect(errors).toEqual([]);
+});
+
+test('the hosted voice speaks without any download, streams PCM, and explains itself when the proxy fails', async ({ page }) => {
+  const { requests, errors } = await setup(page, false, 'ready');
+  // 24 kHz mono PCM with a constant tone, delivered in several chunks like the real proxy.
+  const samples = 24000; const pcm = Buffer.alloc(samples * 2);
+  for (let i = 0; i < samples; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 8) * 8000), i * 2);
+  let speakCalls = 0;
+  await page.route('**/api/voice/speak', route => { speakCalls++; return route.fulfill({ status: 200, contentType: 'audio/pcm;codec=s16le;rate=24000', body: pcm }); });
+  await expect(page.locator('#engine-label')).toHaveText('Deepgram voice · Ready');
+  await expect(page.locator('#local-label-text')).toContainText('Voice by Deepgram');
+  await expect(page.locator('.device-privacy')).toContainText('Only the text Milo says is sent to Deepgram');
+  await expect(page.locator('#device-download-size')).toContainText('No download needed');
+  await expect(page.getByRole('combobox', { name: 'VOICE', exact: true })).toContainText('Apollo · American');
+  await expect(page.getByRole('slider', { name: 'Speech pace' })).toBeDisabled();
+  await page.getByRole('tab', { name: 'Write your own' }).click();
+  await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('Hello from the hosted voice.');
+  await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Let Milo speak' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__device.starts)).toBe(1);
+  await expect(page.locator('#speech-status')).toContainText('That’s a wrap');
+  expect(speakCalls).toBe(1);
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
+  await expect(page.locator('#track-time')).toContainText('0:01');
+  // The proxy goes away: the studio says what to do instead of failing silently.
+  await page.unroute('**/api/voice/speak');
+  await page.route('**/api/voice/speak', route => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ message: 'The hosted voice did not respond.' }) }));
+  await page.getByRole('button', { name: 'Let Milo speak' }).click();
+  await expect(page.locator('#speech-status')).toContainText('Download the on-device voice');
   expectPrivate(requests); expect(errors).toEqual([]);
 });
