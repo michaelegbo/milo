@@ -116,3 +116,4 @@ dialog{color:var(--ink);width:460px;max-width:calc(100vw - 36px);max-height:calc
   .app-tabs button[aria-selected=true]{color:#35442f;font-weight:600}
   .app-tabs button[aria-selected=true]:after{content:'';width:4px;height:4px;border-radius:50%;background:var(--accent)}
 }
+@media(max-width:700px){.conversation-next{padding:10px 12px;gap:6px;margin:0 0 6px}.conversation-next p{font-size:10.5px;line-height:1.55}.conversation-next .primary-button{min-height:40px;padding:8px 14px;font-size:11px;align-self:stretch}.conversation-next .eyebrow{display:none}}

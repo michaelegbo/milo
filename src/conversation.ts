@@ -164,7 +164,9 @@ export function createConversation(options: {
     const preparing = !!device?.preparing;
     const refused = device && !remote && !budget.allows(profile);
     const settled = !!health && health.chat.profile === profile && !refused;
-    if (device && !remote && visible && settled && !preparing && !loading && !failed && !healthError && device.supported && unloaded && !autoLoading && (switchRequested || (device.saved === 'all' && !autoLoadDeclined))) {
+    // With ChatGPT replies the device still holds listening (and the fallback voice); load those saved files too, once signed in.
+    const canAutoLoad = !remote || !!codexStatus()?.signedIn;
+    if (device && canAutoLoad && visible && settled && !preparing && !loading && !failed && !healthError && device.supported && unloaded && !autoLoading && (switchRequested || (device.saved === 'all' && !autoLoadDeclined))) {
       // Saved files load without a click. A first download still waits for consent unless the visitor just chose a model.
       autoLoading = true; switchRequested = false; options.device!.start();
     }
@@ -184,7 +186,7 @@ export function createConversation(options: {
         : { text: 'Your ChatGPT account returned no usable models. Choose a different account or switch the reply provider to On this device.' };
     } else if (loading || device?.busy) step = { text: `Milo is getting ready on this device: ${progress}. You can type as soon as replies are ready.` };
     else if (unloaded && device) {
-      const text = remote ? 'Prepare Milo’s voice and listening on this device. Your ChatGPT account provides the replies.'
+      const text = remote ? `Prepare Milo’s ${usesHostedVoice() ? 'listening' : 'voice and listening'} on this device. Your ChatGPT account provides the replies.`
         : device.saved === 'all' ? 'Your models are already saved in this browser. Load them to start talking; nothing downloads again.'
           : device.saved === 'some' ? 'Some files are already saved here. Milo downloads only what is missing, then starts.'
             : usesHostedVoice() ? 'Milo needs its listening and reply models on this device. Your recordings and replies stay in this browser; only the text Milo says goes to Deepgram for its voice.' : 'Milo needs its voice, listening and reply models on this device. Nothing you say leaves this browser.';
