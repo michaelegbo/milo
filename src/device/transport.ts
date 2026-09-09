@@ -1,5 +1,6 @@
 import type { ChatMessage, ConversationMemory } from '../conversation-memory';
 import { clearStoredModels, holdModelStorage } from './model-storage';
+import { codexHealth, usesCodex } from '../reply-provider';
 
 export type DeviceProfile = 'fast' | 'quality' | 'hybrid';
 type AudioClient = (typeof import('./audio-client'))['deviceAudio'];
@@ -29,7 +30,7 @@ export function deviceHealth() {
   const approved = approvedProfiles.has(selectedProfile);
   return {
     tts: voices.tts, stt: voices.stt,
-    chat: { ...unloaded, ...mind, status: initializingProfile ? 'loading' : !approved ? 'unloaded' : mind?.status ?? 'unloaded',
+    chat: usesCodex() ? codexHealth(selectedProfile) : { ...unloaded, ...mind, status: initializingProfile ? 'loading' : !approved ? 'unloaded' : mind?.status ?? 'unloaded',
       profile: selectedProfile, acceleration: mind?.acceleration ?? acceleration, residency: 'single',
       residencyReason: 'One reply model stays in memory. Hybrid loads the selected model when a turn needs it.' },
   };
@@ -61,18 +62,21 @@ export async function initializeDevice(conversation: boolean, signal: AbortSigna
   if (!conversation) {
     await audio.initialize('tts', { signal });
   } else {
-    chat ??= (await import('./chat-client')).deviceChat;
+    if (!usesCodex()) chat ??= (await import('./chat-client')).deviceChat;
     signal.throwIfAborted();
     conversationConsent = true; approvedProfiles.add(profile);
     await audio.initialize('both', { signal });
     signal.throwIfAborted();
-    await chat.initialize({ profile, signal });
+    if (!usesCodex()) await chat!.initialize({ profile, signal });
   }
   } finally {
     if (initializingProfile === profile) initializingProfile = undefined;
     window.dispatchEvent(new Event('milo-device-change'));
   }
 }
+
+// Changing providers cancels downloads and releases model workers before new work.
+window.addEventListener('milo-provider-change', () => { void unloadDevice(); });
 
 export function unloadDevice() {
   return unloadOperation ??= (async () => {

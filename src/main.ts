@@ -48,7 +48,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="header">
     <a class="brand" href="/" aria-label="Milo home"><span class="brand-symbol"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 17V7l9 8 9-8v10" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>milo<span class="brand-period">.</span></span></a>
     <nav aria-label="Main navigation"><span class="nav-active" aria-current="page">Avatar studio</span><button id="about-button">Behind the voice ${icon('arrow')}</button></nav>
-    <div class="local-label"><span class="status-dot"></span> ${isDeviceOnly ? 'AI in your browser' : 'Made to run locally'}</div>
+    <div class="local-label"><span class="status-dot"></span> ${isDeviceOnly ? 'Voice on your device' : 'Made to run locally'}</div>
   </header>
   <main>
     <section class="intro" aria-labelledby="page-title"><div><div class="eyebrow">A LITTLE EXPERIMENT IN EXPRESSION</div><h1 id="page-title">Give a little character a voice<span>.</span></h1><p>Choose the words. Milo will do the talking.</p>${isDeviceOnly ? `<div class="device-source-links"><a href="${MILO_REPOSITORY}" target="_blank" rel="noreferrer">View source ${icon('arrow')}</a><a href="${MILO_REPOSITORY}/archive/refs/heads/main.zip">Download Milo ${icon('download')}</a><span>Free for personal, noncommercial use</span></div>` : ''}</div><span class="edition">STUDIO / 001</span></section>
@@ -112,7 +112,7 @@ const devicePanel = isDeviceOnly ? createDevicePanel(el('device-setup'), () => {
 if (isDeviceOnly) {
   document.body.dataset.deployment = 'device';
   const note = document.querySelector<HTMLElement>('.about-note')!;
-  note.textContent = 'This browser edition downloads Kokoro, Whisper, and Qwen only after you choose Download & start. Voice and listening run on your CPU; compatible browsers can accelerate replies with the GPU. Text, recorded audio, and replies are never sent to an inference server. Models can be cached; your browser may remove them when storage is needed. Chat history is held in this tab and clears on reload. Large models may not fit on phones or tablets; no server fallback is used.';
+  note.textContent = 'Milo starts with on-device replies. Models download only after you choose Download & start. Voice and listening run on your CPU; compatible browsers can accelerate local replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through your personal desktop companion, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Providers never switch automatically.';
   el('retry').textContent = 'Open model setup';
 }
 

@@ -37,3 +37,18 @@ dialog{color:var(--ink);width:460px;max-width:calc(100vw - 36px);max-height:calc
 @media(max-width:800px){.device-setup{grid-template-columns:minmax(0,1fr) 260px;padding:21px;gap:16px 22px}.device-setup-copy>p{font-size:11px}.device-setup-copy .device-privacy{font-size:10px}.device-source-links{gap:6px 20px}.device-source-links>span{flex-basis:100%}}
 @media(max-width:600px){.device-setup{grid-template-columns:1fr;padding:21px 20px;gap:17px}.device-setup h2{font-size:21px}.device-setup-copy>p{font-size:12px}.device-setup-copy .device-privacy{font-size:11px}.device-setup-action>span{font-size:10px}.device-setup-action .text-button{min-height:40px}.device-source-links a{min-height:44px}.device-progress-area>p{font-size:11px}.device-requirements{font-size:10px}.device-requirements summary{min-height:38px;padding-top:9px}}
 .device-delete-actions{display:flex;justify-content:flex-end;align-items:center;gap:16px;margin-top:22px}.device-delete-actions .primary-button{background:#a5523b;color:#fff;min-height:44px;padding:12px 18px}.device-delete-actions .text-button{min-height:44px}#device-delete-error{color:#a05239}#device-delete-inventory{font-weight:600}#device-delete{color:#996b51}@media(max-width:460px){.device-delete-actions{flex-wrap:wrap}.device-delete-actions .primary-button{flex:1}#device-delete-dialog{padding:22px}#device-delete-title{font-size:25px}}
+/* Reply provider follows the studio's existing quiet form styling. */
+.reply-provider-panel { border-bottom: 1px solid var(--line, #deded5); padding-bottom: 14px; margin-bottom: 14px; }
+.codex-controls { font-size: 12px; line-height: 1.6; }
+.codex-controls p { margin: 8px 0; }
+.codex-controls a { color: inherit; text-underline-offset: 3px; }
+.codex-controls details { margin: 10px 0; }
+.codex-controls summary { cursor: pointer; }
+.codex-controls code { overflow-wrap: anywhere; }
+.codex-pair-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.codex-pair-row input { min-width: 0; width: 100%; border: 1px solid #d8d8cf; border-radius: 6px; padding: 10px; background: transparent; color: inherit; font: inherit; }
+.codex-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 10px 0; }
+.codex-controls button { min-height: 36px; }
+.codex-controls select { max-width: 100%; }
+.codex-controls [hidden] { display: none; }
+#codex-status { overflow-wrap: anywhere; color: #6a665b; }

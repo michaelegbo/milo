@@ -1,5 +1,6 @@
 import { deleteDeviceModels, deviceHealth, initializeDevice, unloadDevice } from './transport';
 import { storedModels } from './model-storage';
+import { usesCodex } from '../reply-provider';
 
 /** Consent and recovery live beside the studio, before any model is requested. */
 export function createDevicePanel(container: HTMLElement, onStop: () => void) {
@@ -22,13 +23,18 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
   function render() {
     const health = deviceHealth();
     const profile = health.chat.profile;
-    const engines = conversation ? [['Voice', health.tts], ['Listening', health.stt], ['Replies', health.chat]] as const : [['Voice', health.tts]] as const;
+    const engines = conversation ? usesCodex() ? [['Voice', health.tts], ['Listening', health.stt]] as const : [['Voice', health.tts], ['Listening', health.stt], ['Replies', health.chat]] as const : [['Voice', health.tts]] as const;
     const ready = engines.every(([, value]) => value.status === 'ready');
     const active = engines.some(([, value]) => value.status !== 'unloaded');
     const failed = engines.find(([, value]) => value.status === 'error');
     const loading = engines.find(([, value]) => value.status === 'loading');
     el('device-setup-description').textContent = conversation ? profile === 'hybrid' ? 'Simple turns stay quick. Deeper questions load the stronger model on this device.' : profile === 'quality' ? 'Make room for Milo’s larger reply model. This can be demanding on smaller devices.' : 'Download Milo’s voice, ears, and quick replies to chat right here.' : 'Download the voice once, then let Milo do the talking.';
     el('device-download-size').textContent = conversation ? profile === 'fast' ? 'About 1.3 GB total on first use' : profile === 'hybrid' ? 'About 1.3 GB to start · up to 3.8 GB with deeper replies' : 'About 2.7 GB total on first use' : 'About 92 MB on first use';
+    if (conversation && usesCodex()) {
+      el('device-setup-description').textContent = 'Prepare Milo’s voice and listening here. Your ChatGPT account provides the replies.';
+      el('device-download-size').textContent = 'About 172 MB total · no local reply model needed';
+    }
+    container.querySelector('.device-privacy')!.textContent = usesCodex() ? 'Voice recordings stay on your device. Messages and conversation context go to OpenAI for ChatGPT replies.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
     const start = el<HTMLButtonElement>('device-start');
     start.textContent = preparing || loading ? 'Preparing on your device…' : ready ? 'Ready on this device ✓' : error || failed ? 'Try loading again ↘' : conversation ? 'Download & start conversation ↘' : 'Download & start voice ↘';
     start.disabled = deleting || !supported || !!preparing || !!loading || ready;
@@ -100,10 +106,12 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     });
   });
   const timer = setInterval(render, 700);
+  const onProvider = () => { preparing?.abort(); preparing = undefined; error = ''; notice = ''; render(); };
+  window.addEventListener('milo-provider-change', onProvider);
   window.addEventListener('milo-device-change', render);
   render();
   return {
     setConversation(value: boolean) { conversation = value; error = ''; render(); },
-    dispose() { disposed = true; preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); void unloadDevice(); },
+    dispose() { disposed = true; preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
   };
 }

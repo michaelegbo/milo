@@ -1,6 +1,6 @@
 # Milo — a voice companion in 3D
 
-Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **Hosted Milo processes speech, transcription, replies and conversation summaries on your device.** Its cloud service delivers the website and downloadable model files; it has no inference server or server fallback.
+Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **On-device processing is the default.** Its cloud service delivers the website and downloadable model files; it has no inference server. An optional **ChatGPT · My account** provider uses your own locally running Codex companion for replies. Voice recordings and speech processing remain on your device; messages and conversation context go to OpenAI only when you select that provider. There is no automatic switch to a cloud provider.
 
 **Website:** [milo.seemplifyai.com](https://milo.seemplifyai.com) · **Source:** [michaelegbo/milo](https://github.com/michaelegbo/milo) · **License:** [PolyForm Noncommercial 1.0.0](LICENSE)
 
@@ -29,6 +29,22 @@ Initial preparation can take minutes and conversation downloads are large. Start
 - Session memory for explicit details and earlier conversation, shared across Fast, Better answers and Hybrid within the tab.
 
 The mouth shapes approximate audio energy and frequency bands; they are not phoneme-accurate lip sync. Delivery cues use simple rules applied to Milo's outgoing words, not emotion recognition of the person speaking.
+
+## Use your ChatGPT account
+
+Open **Conversation → Reply provider → ChatGPT · My account**. Start the small companion on your Windows, macOS or Linux computer, connect using its private pairing code, and select **Sign in to ChatGPT**. Sign-in opens OpenAI's own page. Milo never asks for your ChatGPT password or copies the Codex desktop app's login.
+
+```sh
+npm run codex:bridge
+```
+
+Requires Node.js 24 and the Codex CLI (tested with 0.153.4). The companion is a foreground process, bound to `127.0.0.1:8790`; it is not installed as a service. Keep its terminal open while chatting. Your ChatGPT account must have access to Codex; model availability and usage limits come from your account. No API key is required for this provider.
+
+Choose a model returned by Codex. **Fast**, **Better answers** and **Hybrid** select lighter, deeper or automatically routed thinking effort on that chosen model. They do not secretly switch to another model. GPU acceleration applies to the local Qwen provider, not to OpenAI's servers. ChatGPT mode needs about **172 MB** of voice/listening downloads, with no local Qwen download.
+
+**Disconnect** returns to local replies and forgets this tab's pairing code. **Sign out of ChatGPT** signs out Milo's companion only. Reload starts with the private local provider again. Direct mobile-browser ChatGPT sign-in is not supported: the Codex companion must run on the same desktop as the browser. Browser local-network permissions can affect connectivity.
+
+See the [complete companion setup, privacy, troubleshooting and test guide](docs/chatgpt-companion.md).
 
 ## Models and downloads
 

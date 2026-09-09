@@ -8,6 +8,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:web": "vite --host 127.0.0.1 --port 5173 --strictPort",
     "dev:speech": "node server/index.mjs",
+    "codex:bridge": "node server/codex-bridge.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5173 --strictPort",
     "test": "node --test server/*.test.mjs && playwright test"

@@ -114,6 +114,11 @@ const server = http.createServer(async (request, response) => {
     if (request.method === 'POST' && pathname === '/api/conversation/prepare') {
       const body = await readJson(request);
       const profile = getChatMode(body?.profile ?? 'fast');
+      if (body?.provider === 'codex') {
+        void recognizer.initialize().catch(error => console.error('[conversation] Recognizer initialization:', error.message));
+        json(response, 202, conversationHealth());
+        return;
+      }
       const current = conversation.health();
       if (current.profile !== profile.id && (current.status === 'loading' || current.queueDepth > 0)) {
         throw new ChatError(409, 'profile_busy', 'Finish loading or stop the current turn before changing profiles.');

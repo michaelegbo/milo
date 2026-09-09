@@ -1,5 +1,7 @@
 import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
+import { usesCodex } from './reply-provider';
+import { createCodexPanel } from './codex-panel';
 import { MicrophoneRecorder } from './microphone';
 import type { SpeechPlayer } from './speech';
 import { readReplyStream, rememberExplicitFacts, type ChatMessage as Message, type ConversationMemory } from './conversation-memory';
@@ -67,6 +69,10 @@ export function createConversation(options: {
     el('memory-detail').textContent = [...facts.values(), summary && `Earlier conversation: ${summary}`, 'Stored only for this chat. New chat clears everything.'].filter(Boolean).join('\n');
   }
   function render() {
+    const remote = usesCodex();
+    const modeSelect = el<HTMLSelectElement>('conversation-model');
+    modeSelect.options[0].text = remote ? 'Fast · Less thought' : 'Fast · Qwen 1.5B';
+    modeSelect.options[1].text = remote ? 'Better answers · More thought' : 'Better answers · Qwen 4B';
     const start = el<HTMLButtonElement>('conversation-start');
     start.textContent = state === 'listening' ? 'Send voice message' : ['transcribing', 'thinking', 'voicing'].includes(state) ? `${labels[state]}…` : micMuted ? 'Unmute & talk' : state === 'speaking' ? 'Interrupt & talk' : 'Start conversation';
     start.disabled = state !== 'listening' && (!voiceReady() || ['transcribing', 'thinking', 'voicing'].includes(state));
@@ -79,6 +85,12 @@ export function createConversation(options: {
       (container.querySelector('.conversation-acceleration') as HTMLElement).hidden = !health?.chat.acceleration?.available && !health?.chat.acceleration?.enabled;
       (container.querySelector('.conversation-note') as HTMLElement).textContent = `English voice · AI stays in this browser · ${health?.chat.device === 'gpu' ? 'GPU replies' : 'CPU'}`;
       if (profile === 'hybrid') el('model-hint').textContent = 'Adapts each reply. One model is loaded at a time.';
+    }
+    if (remote) {
+      (container.querySelector('.conversation-acceleration') as HTMLElement).hidden = true;
+      (container.querySelector('.conversation-note') as HTMLElement).textContent = 'Voice on your device · Replies through your ChatGPT account';
+      el('model-hint').textContent = profile === 'hybrid' ? 'Adjusts thinking effort for each reply using your selected ChatGPT model.' : profile === 'fast' ? 'Uses a lighter supported thinking effort.' : 'Uses a deeper supported thinking effort.';
+      el('model-hint').title = 'ChatGPT replies use your account allowance. Local GPU acceleration does not apply.';
     }
     el('conversation-route').hidden = profile !== 'hybrid';
     el('conversation-route').dataset.depth = replyRoute?.profile || 'auto';
@@ -109,10 +121,13 @@ export function createConversation(options: {
     el('mic-toggle-label').textContent = micMuted ? 'Unmute mic' : 'Mute mic';
     el('mic-state').textContent = micMuted ? 'Mic muted' : monitoring ? 'Listening for interruption' : state === 'listening' ? micLive ? 'Listening' : 'Waiting for permission' : ['transcribing', 'thinking', 'voicing', 'speaking'].includes(state) ? 'Mic paused' : 'Mic idle';
     el('conversation-engines').textContent = healthError || (!health ? 'Connecting to your local engines…' : [
-      ['Whisper', health.stt], [(health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], ['Kokoro', health.tts],
+      ['Whisper', health.stt], [remote ? 'ChatGPT' : (health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], ['Kokoro', health.tts],
     ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'unloaded' ? 'not loaded' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
     el('conversation-engines').title = 'All inference stays on this computer. Conversation replies can use the GPU; listening and speech use CPU. Models are cached for later use.';
     if (isDeviceOnly) el('conversation-engines').title = 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. Choose Download & start above to prepare them. No server fallback.';
+    if (remote) el('conversation-engines').title = 'Voice and listening stay on this device. Messages and conversation context are sent to OpenAI through your personal companion.';
+    const emptyNote = container.querySelector<HTMLElement>('.conversation-empty > span:last-child');
+    if (emptyNote) emptyNote.textContent = remote ? 'ChatGPT receives this conversation’s text.' : 'Your conversation stays in this tab.';
     el('conversation-retry').hidden = !healthError && !Object.values(health ?? {}).some(engine => engine.status === 'error');
     options.onStateChange();
   }
@@ -440,6 +455,11 @@ export function createConversation(options: {
   el<HTMLSelectElement>('conversation-voice').value = options.getVoice().voice;
   el('conversation-voice').addEventListener('change', () => options.setVoice(el<HTMLSelectElement>('conversation-voice').value));
   const healthTimer = setInterval(() => void checkHealth(), 2000);
+  const providerContainer = document.createElement('div'); providerContainer.className = 'reply-provider-panel';
+  container.querySelector('.conversation-model')!.before(providerContainer);
+  const codexPanel = createCodexPanel(providerContainer, () => { stopWork(); gpuRequest?.abort(); gpuIntent = undefined; gpuEpoch++; health = undefined; setState('idle', 'Reply provider changed. Prepare the selected voice and connection to continue.'); });
+  const onProviderChange = () => { gpuEpoch++; void checkHealth().then(() => { if (visible) void prepare(); }); };
+  window.addEventListener('milo-provider-change', onProviderChange);
   const onDeviceHealth = () => { if (isDeviceOnly) void checkHealth(); };
   if (isDeviceOnly) window.addEventListener('milo-device-change', onDeviceHealth);
   return {
@@ -453,6 +473,6 @@ export function createConversation(options: {
       else end();
     },
     cancel: end,
-    dispose() { disposed = true; visible = false; stopWork(); gpuRequest?.abort(); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+    dispose() { disposed = true; visible = false; stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
   };
 }
