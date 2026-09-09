@@ -1,6 +1,6 @@
 import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
-import { codexStatus, usesCodex } from './reply-provider';
+import { codexRequest, codexStatus, updateCodexStatus, usesCodex } from './reply-provider';
 import { usesHostedVoice, voiceLabel } from './voice-provider';
 import { deviceBudget } from './device/device-budget';
 import { createCodexPanel } from './codex-panel';
@@ -45,6 +45,7 @@ export function createConversation(options: {
     <form id="conversation-form" class="conversation-composer"><label class="sr-only" for="conversation-input">Message Milo</label><input id="conversation-input" type="text" maxlength="1000" placeholder="Or type something to Milo…" autocomplete="off"><button id="conversation-send" type="submit" aria-label="Send message" disabled>Send ↗</button></form>
     <details class="conversation-memory"><summary>What Milo remembers <span id="memory-count">This chat only</span></summary><p id="memory-detail">Explicit details and a short conversation summary will appear here. New chat clears everything.</p></details>
     <p class="conversation-note">English voice · Local inference · Whisper + Qwen + Kokoro</p>
+    <dialog id="conversation-connect" class="conversation-loading conversation-connect" aria-labelledby="conversation-connect-title" aria-describedby="conversation-connect-text"><span class="eyebrow">CHATGPT REPLIES</span><h2 id="conversation-connect-title">Connect ChatGPT</h2><p id="conversation-connect-text">On a phone Milo answers through your ChatGPT account, so nothing large downloads. Sign in once on OpenAI’s page; Milo connects on its own when you come back.</p><div id="conversation-connect-code" class="codex-code-row" hidden><strong id="conversation-connect-usercode" aria-label="OpenAI one-time code"></strong><button id="conversation-connect-copy" class="text-button" type="button">Copy code</button></div><p id="conversation-connect-status" role="status"></p><div class="conversation-loading-actions"><button id="conversation-connect-later" class="text-button" type="button">Not now</button><span class="conversation-connect-buttons"><a id="conversation-connect-open" class="primary-button" target="_blank" rel="noopener noreferrer" hidden>Open OpenAI ↗</a><button id="conversation-connect-start" class="primary-button" type="button">Connect ChatGPT ↗</button></span></div></dialog>
     <dialog id="conversation-loading" class="conversation-loading" aria-labelledby="conversation-loading-title" aria-describedby="conversation-loading-text"><span class="eyebrow">GETTING READY</span><h2 id="conversation-loading-title">Loading your saved models…</h2><p id="conversation-loading-text"></p><progress id="conversation-loading-bar" max="100" aria-label="Model loading progress"></progress><div class="conversation-loading-actions"><span id="conversation-loading-note">Saved files load from this browser; nothing downloads.</span><button id="conversation-loading-cancel" class="text-button" type="button">Cancel</button></div></dialog>`;
   const el = <T extends HTMLElement = HTMLElement>(id: string) => container.querySelector<T>(`#${id}`)!;
   const checked = (id: string) => el<HTMLInputElement>(id).checked;
@@ -140,11 +141,14 @@ export function createConversation(options: {
     const emptyNote = container.querySelector<HTMLElement>('.conversation-empty > span:last-child');
     if (emptyNote) emptyNote.textContent = remote ? 'ChatGPT receives this conversation’s text.' : 'Your conversation stays in this tab.';
     renderNextStep(remote);
+    renderConnectModal(remote);
     options.onStateChange();
   }
   let nextAction: (() => void) | undefined;
   // Saved models load on their own behind a modal; a cancel holds that off until the next visit.
   let autoLoadDeclined = false, autoLoading = false;
+  // Phones are asked to connect ChatGPT in a modal; Not now leaves the inline sign-in step instead.
+  let connectDeclined = false, connectBusy = false;
   // Choosing a model in the menu is itself the go-ahead: the chosen model prepares without another click.
   let switchRequested = false;
   let codexLogin: (() => void) | undefined;
@@ -542,6 +546,39 @@ export function createConversation(options: {
   navigator.mediaDevices?.addEventListener('devicechange', onDeviceChange);
   el('conversation-end').addEventListener('click', end);
   el('conversation-next-action').addEventListener('click', () => { nextAction?.(); render(); });
+  const connectDialog = el<HTMLDialogElement>('conversation-connect');
+  function renderConnectModal(remote: boolean) {
+    const status = codexStatus();
+    const open = visible && remote && budget.mobile && !status?.signedIn && !connectDeclined && !el<HTMLDialogElement>('conversation-loading').open;
+    if (open && !connectDialog.open) { try { connectDialog.showModal(); } catch { /* Already open. */ } }
+    else if (!open && connectDialog.open) connectDialog.close();
+    if (!open) return;
+    const login = status?.login;
+    el('conversation-connect-code').hidden = !login;
+    el('conversation-connect-usercode').textContent = login?.userCode ?? '';
+    const link = el<HTMLAnchorElement>('conversation-connect-open');
+    link.hidden = !login;
+    if (login?.verificationUrl === 'https://auth.openai.com/codex/device') link.href = login.verificationUrl; else link.removeAttribute('href');
+    const start = el<HTMLButtonElement>('conversation-connect-start');
+    start.hidden = !!login; start.disabled = connectBusy;
+    el('conversation-connect-status').textContent = connectBusy ? 'Asking OpenAI for a one-time code…' : status?.loginError || (login ? `Enter this code on OpenAI’s page. Waiting for OpenAI… it expires in about ${Math.max(0, Math.ceil((login.expiresAt - Date.now()) / 60000))} minutes.` : 'No password is typed here. OpenAI shows a one-time code; the connection stays on this server for 24 hours.');
+  }
+  async function startConnect() {
+    if (connectBusy) return;
+    connectBusy = true; render();
+    try {
+      const result = await (await codexRequest('/login', {})).json();
+      if (result.login && (result.login.verificationUrl !== 'https://auth.openai.com/codex/device' || !/^[A-Za-z0-9-]{4,32}$/.test(result.login.userCode))) throw new Error('OpenAI sign-in could not be started. Please retry.');
+      updateCodexStatus(result);
+    } catch (error) {
+      el('conversation-connect-status').textContent = error instanceof Error ? error.message : 'Connection failed. Try again.';
+    } finally { connectBusy = false; if (!disposed) render(); }
+  }
+  el('conversation-connect-start').addEventListener('click', () => void startConnect());
+  el('conversation-connect-copy').addEventListener('click', () => { const code = codexStatus()?.login?.userCode; if (code) void navigator.clipboard?.writeText(code).then(() => { el('conversation-connect-copy').textContent = 'Copied'; }).catch(() => {}); });
+  const declineConnect = () => { connectDeclined = true; if (connectDialog.open) connectDialog.close(); render(); };
+  el('conversation-connect-later').addEventListener('click', declineConnect);
+  connectDialog.addEventListener('cancel', event => { event.preventDefault(); declineConnect(); });
   const loadingDialog = el<HTMLDialogElement>('conversation-loading');
   function renderLoadingModal(preparing: boolean, engines: readonly (readonly [string, Engine])[], failed?: Engine) {
     const open = preparing && visible && !failed;
@@ -596,6 +633,6 @@ export function createConversation(options: {
       else { cancelMicAccess(); end(); }
     },
     cancel: end,
-    dispose() { disposed = true; visible = false; if (loadingDialog.open) loadingDialog.close(); cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); window.removeEventListener('milo-voice-change', render); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+    dispose() { disposed = true; visible = false; if (loadingDialog.open) loadingDialog.close(); if (connectDialog.open) connectDialog.close(); cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); window.removeEventListener('milo-voice-change', render); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
   };
 }

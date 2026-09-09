@@ -541,14 +541,28 @@ test('the hosted voice speaks without any download, streams PCM, and explains it
   expectPrivate(requests); expect(errors).toEqual([]);
 });
 
-test('an iPhone is offered Fast only and never starts loading a model it cannot hold', async ({ page }) => {
+test('an iPhone starts on ChatGPT with a connect dialog, and on-device replies offer Fast only', async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1' });
     Object.defineProperty(navigator, 'deviceMemory', { get: () => undefined });
   });
   const { requests, errors } = await setup(page);
+  const hosted = await mockHostedChatGPT(page, false);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('tab', { name: 'Conversation' }).click();
+  // A phone starts on ChatGPT and is asked to connect in a dialog; no local model is offered first.
+  await expect(page.getByLabel('REPLY PROVIDER')).toHaveValue('codex');
+  const connect = page.locator('#conversation-connect');
+  await expect(connect).toBeVisible();
+  await connect.getByRole('button', { name: 'Connect ChatGPT ↗' }).click();
+  await expect(connect.locator('#conversation-connect-usercode')).toHaveText(/MILO-CODE/);
+  await expect(connect.getByRole('link', { name: 'Open OpenAI ↗' })).toHaveAttribute('href', 'https://auth.openai.com/codex/device');
+  hosted.signedIn = true; hosted.pending = false;
+  await expect(connect).toBeHidden({ timeout: 10_000 });
+  await expect(page.locator('#codex-status')).toContainText('ChatGPT connected');
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  // Switching to on-device replies keeps the memory guard: only Fast is offered here.
+  await page.getByLabel('REPLY PROVIDER').selectOption('device');
   const mind = page.getByLabel('MILO’S MIND', { exact: true });
   await expect(mind).toHaveValue('fast');
   await expect(mind.locator('option[value=quality]')).toBeDisabled();
@@ -566,5 +580,7 @@ test('an iPhone is offered Fast only and never starts loading a model it cannot 
   await expect(page.locator('#conversation-start')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:fast']);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expectPrivate(requests); expect(errors).toEqual([]);
+  // ChatGPT sign-in calls are the point here; inference routes still never leave the device.
+  expect(requests.filter(url => new URL(url).pathname.startsWith('/api/') && !/^\/api\/(voice|codex)\//.test(new URL(url).pathname))).toEqual([]);
+  expect(errors).toEqual([]);
 });

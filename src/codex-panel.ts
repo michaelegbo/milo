@@ -58,6 +58,7 @@ export function createCodexPanel(container: HTMLElement, onStop: () => void) {
   el('codex-model').addEventListener('change', () => { const value = el<HTMLSelectElement>('codex-model').value; onStop(); selectCodexModel(value); window.dispatchEvent(new Event('milo-device-change')); });
   const timer = setInterval(() => { if (usesCodex() && (codexStatus()?.loginPending || codexStatus()?.signedIn) && !busy) void run(refreshCodex, true); }, 3000);
   window.addEventListener('milo-device-change', render); render();
+  if (usesCodex()) void run(refreshCodex, true); // A phone starts here; pick up an existing session without a click.
   return {
     /** Start sign-in from elsewhere in the panel, or bring the controls into view when sign-in is already underway. */
     login() {

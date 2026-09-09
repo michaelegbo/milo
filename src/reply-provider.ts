@@ -1,6 +1,10 @@
+import { isDeviceOnly } from './deployment';
+import { deviceBudget } from './device/device-budget';
+
 export type ReplyProvider = 'device' | 'codex';
 export type CodexStatus = { connected: boolean; signedIn: boolean; plan?: string; loginPending?: boolean; loginError?: string; login?: { verificationUrl: string; userCode: string; expiresAt: number } | null; models: { id: string; name: string; isDefault: boolean }[] };
-let provider: ReplyProvider = 'device', model = '', status: CodexStatus | undefined, epoch = 0;
+// A phone's browser tab cannot hold a local reply model, so phones start on ChatGPT replies.
+let provider: ReplyProvider = isDeviceOnly && deviceBudget().mobile ? 'codex' : 'device', model = '', status: CodexStatus | undefined, epoch = 0;
 // Remove credentials from the superseded local-companion implementation.
 try { sessionStorage.removeItem('milo-companion-pairing'); } catch { /* Optional storage. */ }
 export const usesCodex = () => provider === 'codex';
