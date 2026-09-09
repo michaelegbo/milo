@@ -16,10 +16,12 @@ test.beforeEach(async ({ page }) => {
       calls: [] as MediaStreamConstraints[], tracks: [] as MediaStreamTrack[], enumerations: 0,
       devices: [{ deviceId: 'desk-mic', label: 'Desk microphone' }, { deviceId: 'usb-mic', label: 'USB headset' }],
       holdPermission: false, releasePermission: undefined as undefined | (() => void), transcriptions: 0,
+      requirePermission: false, permissionGranted: false, denyPermission: false,
     };
     const get = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia = async constraints => {
       harness.calls.push(structuredClone(constraints));
+      if (harness.denyPermission) throw new DOMException('Denied by test', 'NotAllowedError');
       // Record the app's exact hardware selection, while letting Chrome's one
       // synthetic device supply real audio without a physical microphone.
       const safe = structuredClone(constraints!);
@@ -27,10 +29,12 @@ test.beforeEach(async ({ page }) => {
       const stream = await get(safe);
       harness.tracks.push(...stream.getTracks());
       if (harness.holdPermission) await new Promise<void>(resolve => { harness.releasePermission = resolve; });
+      harness.permissionGranted = true;
       return stream;
     };
     navigator.mediaDevices.enumerateDevices = async () => {
       harness.enumerations++;
+      if (harness.requirePermission && !harness.permissionGranted) return [];
       return harness.devices.map((device: { deviceId: string; label: string }) => ({ ...device, kind: 'audioinput', groupId: 'synthetic', toJSON() { return { ...device, kind: 'audioinput', groupId: 'synthetic' }; } }));
     };
   });
@@ -259,4 +263,50 @@ test('a delayed conversation summary survives automatic listening for the next v
   await expect(page.locator('#memory-detail')).toContainText('We discussed five earlier topics and kept their context.');
   await page.getByRole('button', { name: 'End conversation', exact: true }).click();
   await expect.poll(() => allTracksEnded(page)).toBe(true);
+});
+
+test('permission action reveals microphones, releases discovery tracks, and uses the selected input', async ({page}, testInfo) => {
+  await page.evaluate(()=>{(window as any).__micControls.requirePermission=true;});
+  await page.getByRole('button',{name:'Refresh microphones'}).click();
+  await expect(page.locator('#mic-device option')).toHaveCount(1);
+  await expect(page.getByRole('button',{name:'Allow microphone access'})).toBeVisible();
+  expect(await calls(page)).toBe(0);
+  await page.getByRole('button',{name:'Allow microphone access'}).click();
+  await expect(page.locator('#mic-device option')).toHaveCount(3);
+  await expect.poll(()=>allTracksEnded(page)).toBe(true);
+  expect(await page.evaluate(()=>(window as any).__micControls.calls[0])).toEqual({audio:true,video:false});
+  await page.getByRole('combobox',{name:'Microphone input'}).selectOption('usb-mic');
+  await page.getByRole('button',{name:'Refresh microphones'}).click();
+  await expect(page.getByRole('combobox',{name:'Microphone input'})).toHaveValue('usb-mic');
+  expect(await calls(page)).toBe(1);
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('.mic-controls').screenshot({path:testInfo.outputPath('microphone-selection-mobile.png')});
+  await page.getByRole('button',{name:'Start conversation',exact:true}).click();
+  await expect.poll(()=>calls(page)).toBe(2);
+  expect(await page.evaluate(()=>(window as any).__micControls.calls[1].audio.deviceId)).toEqual({exact:'usb-mic'});
+  await page.getByRole('button',{name:'Mute microphone',exact:true}).click();
+  await expect.poll(()=>allTracksEnded(page)).toBe(true);
+});
+
+test('blocked microphone discovery gives recovery and a later permission grant succeeds', async ({page}) => {
+  await page.evaluate(()=>{Object.assign((window as any).__micControls,{requirePermission:true,denyPermission:true});});
+  await page.getByRole('button',{name:'Refresh microphones'}).click();
+  await page.getByRole('button',{name:'Allow microphone access'}).click();
+  await expect(page.locator('#mic-selection-status')).toContainText('browser site settings');
+  expect(await page.evaluate(()=>(window as any).__micControls.tracks.length)).toBe(0);
+  await page.evaluate(()=>{(window as any).__micControls.denyPermission=false;});
+  await page.getByRole('button',{name:'Allow microphone access'}).click();
+  await expect(page.locator('#mic-device option')).toHaveCount(3);
+  await expect.poll(()=>allTracksEnded(page)).toBe(true);
+});
+
+test('leaving while discovery permission is pending releases the late stream without recording', async ({page}) => {
+  await page.evaluate(()=>{Object.assign((window as any).__micControls,{requirePermission:true,holdPermission:true});});
+  await page.getByRole('button',{name:'Refresh microphones'}).click();
+  await page.getByRole('button',{name:'Allow microphone access'}).click();
+  await expect.poll(()=>page.evaluate(()=>!!(window as any).__micControls.releasePermission)).toBe(true);
+  await page.getByRole('tab',{name:'Sentence studio'}).click();
+  await page.evaluate(()=>{(window as any).__micControls.releasePermission();});
+  await expect.poll(()=>allTracksEnded(page)).toBe(true);
+  expect(await page.evaluate(()=>(window as any).__micControls.transcriptions)).toBe(0);
 });

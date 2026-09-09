@@ -19,6 +19,8 @@ Milo is an expressive Three.js robot that speaks your sentences and has voice or
 
 Initial preparation can take minutes and conversation downloads are large. Start with voice or Fast on a laptop; CPU replies can take tens of seconds. This is an experimental local AI companion, with no browsing or external tools.
 
+If the microphone menu shows only **System default**, choose **Allow microphone access** beneath it. Browsers may hide device names until you grant permission. Milo briefly opens and immediately releases a microphone stream to reveal the list; this action does not record or upload audio. Then choose your input. **Refresh microphones** rescans connected devices without opening another stream. If permission is blocked, allow the microphone in the browser's site settings and retry.
+
 ## What makes Milo feel alive
 
 - A procedural robot with ceramic grain, textured orange coating, rubber joints, brushed metal, a polished face lens and studio lighting.

@@ -58,6 +58,8 @@ export function createConversation(options: {
   let request: AbortController | undefined;
   let nextListen: ReturnType<typeof setTimeout> | undefined;
   let micMuted = false, micLive = false, selectedDevice = '', deviceQuery = 0, disposed = false;
+  let micAccessBusy = false, micAccessVersion = 0, permissionStream: MediaStream | undefined;
+  container.querySelector('.mic-controls')!.insertAdjacentHTML('beforeend', '<div class="mic-selection-help"><p id="mic-selection-status" role="status">Checking microphones…</p><button id="mic-enable-selection" class="text-button" hidden>Allow microphone access</button></div>');
   let voiceArmed = false, monitoring = false, monitorSuppressed = false, inputLevel = 0;
   const busy = () => !['idle', 'error', 'speaking'].includes(state);
   const textReady = () => gpuIntent === undefined && health?.chat.acceleration?.status !== 'switching' && health?.chat.status === 'ready' && (!health.chat.profile || health.chat.profile === profile) && health?.tts.status === 'ready';
@@ -75,7 +77,7 @@ export function createConversation(options: {
     modeSelect.options[1].text = remote ? 'Better answers · More thought' : 'Better answers · Qwen 4B';
     const start = el<HTMLButtonElement>('conversation-start');
     start.textContent = state === 'listening' ? 'Send voice message' : ['transcribing', 'thinking', 'voicing'].includes(state) ? `${labels[state]}…` : micMuted ? 'Unmute & talk' : state === 'speaking' ? 'Interrupt & talk' : 'Start conversation';
-    start.disabled = state !== 'listening' && (!voiceReady() || ['transcribing', 'thinking', 'voicing'].includes(state));
+    start.disabled = micAccessBusy || (state !== 'listening' && (!voiceReady() || ['transcribing', 'thinking', 'voicing'].includes(state)));
     el<HTMLButtonElement>('conversation-end').disabled = ['idle', 'error'].includes(state) && !loop;
     el<HTMLButtonElement>('conversation-send').disabled = !textReady() || busy() || !el<HTMLInputElement>('conversation-input').value.trim();
     el<HTMLSelectElement>('conversation-model').disabled = gpuIntent !== undefined || health?.chat.acceleration?.status === 'switching' || ownsPlayback || recorder.active || Boolean(summaryRequest) || !health || health.chat.status === 'loading' || (health.chat.queueDepth ?? 0) > 0 || !['idle', 'error'].includes(state);
@@ -140,7 +142,7 @@ export function createConversation(options: {
   }
   function stopMonitor() { recorder.cancel(); monitoring = false; micLive = false; setLevel(0); }
   async function refreshDevices() {
-    if (!navigator.mediaDevices?.enumerateDevices) return;
+    if (!navigator.mediaDevices?.enumerateDevices) { el('mic-selection-status').textContent = 'Microphone selection needs a supported browser over HTTPS.'; return; }
     const query = ++deviceQuery;
     try {
       const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput' && device.deviceId && !['default', 'communications'].includes(device.deviceId));
@@ -154,11 +156,44 @@ export function createConversation(options: {
       }
       select.value = selectedDevice;
       select.title = devices.some(device => !device.label) ? 'Microphone names appear after you allow microphone access.' : 'Choose the microphone for your next voice message.';
-    } catch { el('mic-device').title = 'Could not list microphones. You can still try the system default.'; }
+      const needsAccess = !devices.length || devices.some(device => !device.label);
+      el('mic-enable-selection').hidden = !needsAccess;
+      el('mic-selection-status').textContent = needsAccess ? 'Allow microphone access to show available inputs.' : `${devices.length} microphone${devices.length === 1 ? '' : 's'} available. Choose an input above.`;
+    } catch { el('mic-device').title = 'Could not list microphones. You can still try the system default.'; el('mic-selection-status').textContent = 'Could not list microphones. Allow access and try again.'; el('mic-enable-selection').hidden = false; }
   }
+  function cancelMicAccess() {
+    micAccessVersion++; permissionStream?.getTracks().forEach(track => track.stop()); permissionStream = undefined;
+  }
+  async function enableMicSelection() {
+    if (micAccessBusy || disposed || !visible) return;
+    if (recorder.active) { await refreshDevices(); return; }
+    if (!navigator.mediaDevices?.getUserMedia) { el('mic-selection-status').textContent = 'Microphone access needs a supported browser over HTTPS.'; return; }
+    micAccessBusy = true;
+    const token = ++micAccessVersion, button = el<HTMLButtonElement>('mic-enable-selection');
+    button.disabled = true; render(); el('mic-selection-status').textContent = 'Allow microphone access in your browser to reveal the inputs…';
+    let stream: MediaStream | undefined;
+    try {
+      // Permission discovery only: no recorder, audio graph, transcription or upload.
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      if (disposed || !visible || token !== micAccessVersion) return;
+      permissionStream = stream;
+      await refreshDevices();
+      if (token === micAccessVersion && !el('mic-enable-selection').hidden) el('mic-selection-status').textContent = 'Access allowed, but this browser exposes only the system input. Use System default or check your connected microphones.';
+    } catch (error) {
+      if (disposed || !visible || token !== micAccessVersion) return;
+      const name = (error as DOMException).name;
+      el('mic-selection-status').textContent = name === 'NotAllowedError' || name === 'SecurityError' ? 'Microphone access is blocked. Allow it in browser site settings, then try again.' : name === 'NotFoundError' ? 'No microphone found. Connect one, then try again.' : 'The microphone could not open. Close other apps using it, then try again.';
+    } finally {
+      stream?.getTracks().forEach(track => track.stop());
+      if (permissionStream === stream) permissionStream = undefined;
+      micAccessBusy = false; if (!disposed) { button.disabled = false; render(); }
+    }
+  }
+  window.addEventListener('pagehide', cancelMicAccess);
   function setMuted(value: boolean) {
     micMuted = value;
     if (value) {
+      cancelMicAccess();
       loop = false; clearTimeout(nextListen); monitorSuppressed = true;
       if (monitoring) stopMonitor();
       else if (state === 'listening') end();
@@ -283,7 +318,7 @@ export function createConversation(options: {
     }).catch(error => fail(error, token));
   }
   async function listen(continueLoop = true, preserveSummary = false) {
-    if (!visible || !voiceReady() || micMuted) return;
+    if (!visible || !voiceReady() || micMuted || micAccessBusy) return;
     stopWork(preserveSummary); loop = continueLoop; voiceArmed = true;
     const token = version;
     setState('listening', 'Go ahead. A short pause sends your message.');
@@ -421,6 +456,7 @@ export function createConversation(options: {
   el('conversation-start').addEventListener('click', () => { if (state === 'listening') recorder.finish(); else { if (micMuted) setMuted(false); void listen(); } });
   el('mic-toggle').addEventListener('click', () => setMuted(!micMuted));
   el('mic-refresh').addEventListener('click', () => void refreshDevices());
+  el('mic-enable-selection').addEventListener('click', () => void enableMicSelection());
   el('gpu-toggle').addEventListener('click', () => void setGpu(!(gpuIntent ?? health?.chat.acceleration?.enabled ?? false)));
   el('mic-device').addEventListener('change', () => {
     selectedDevice = el<HTMLSelectElement>('mic-device').value;
@@ -470,9 +506,9 @@ export function createConversation(options: {
     setVisible(value: boolean) {
       visible = value; container.hidden = !value;
       if (value) { el<HTMLSelectElement>('conversation-voice').value = options.getVoice().voice; void checkHealth().then(() => { if (visible) void prepare(); }); void refreshDevices(); render(); }
-      else end();
+      else { cancelMicAccess(); end(); }
     },
     cancel: end,
-    dispose() { disposed = true; visible = false; stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+    dispose() { disposed = true; visible = false; cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
   };
 }
