@@ -7,7 +7,7 @@ import { readReplyStream, rememberExplicitFacts, type ChatMessage as Message, ty
 type State = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'voicing' | 'speaking' | 'error';
 type ChatMode = 'fast' | 'quality' | 'hybrid';
 type ReplyRoute = { profile: 'fast' | 'quality'; reason: string };
-type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'vulkan' | 'cuda' | 'webgpu' | null; deviceName: string | null; message: string; revision: number };
+type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'vulkan' | 'cuda' | 'webgpu' | null; deviceName: string | null; deviceInfo?: string | null; message: string; revision: number };
 type Engine = { status: string; progress?: number; message?: string; profile?: string; queueDepth?: number; selectedModel?: string | null; residency?: 'dual' | 'single'; residencyReason?: string; device?: 'cpu' | 'gpu' | null; acceleration?: Acceleration; residentModels?: Record<string, { status: string; device?: 'cpu' | 'gpu' | null }> };
 type Health = { stt: Engine; chat: Engine; tts: Engine };
 const labels: Record<State, string> = { idle: 'Ready to talk', listening: 'Listening to you', transcribing: 'Hearing your words', thinking: 'Milo is thinking', voicing: 'Finding Milo’s voice', speaking: 'Milo is speaking', error: 'Let’s try again' };
@@ -25,7 +25,7 @@ export function createConversation(options: {
     <div id="conversation-engines" class="conversation-engines" role="status">Preparing your local conversation…</div>
     <button id="conversation-retry" class="retry-button" hidden>Try loading again</button>
     <div class="conversation-model"><label for="conversation-model">MILO’S MIND</label><select id="conversation-model"><option value="fast">Fast · Qwen 1.5B</option><option value="quality">Better answers · Qwen 4B</option><option value="hybrid">Hybrid · Adapts to you</option></select><span id="model-hint">Quick, everyday conversation.</span><div id="conversation-route" class="conversation-route" role="status" hidden><span id="route-label">Chooses for each reply</span><span id="route-reason">Simple chat stays quick. Complex questions get more thought.</span></div></div>
-    <div class="conversation-acceleration"><div><span class="gpu-heading">GPU acceleration</span><span id="gpu-device">Checking compatible hardware…</span></div><button id="gpu-toggle" class="gpu-toggle" role="switch" aria-label="GPU acceleration" aria-checked="false" aria-describedby="gpu-status" disabled><span class="switch" aria-hidden="true"></span><span id="gpu-toggle-label">Off</span></button><p id="gpu-status" role="status">Checking for a GPU…</p><span class="gpu-scope">Replies only · speech stays on CPU</span></div>
+    <div class="conversation-acceleration"><div><span class="gpu-heading">GPU acceleration</span><span id="gpu-device">Checking compatible hardware…</span></div><button id="gpu-toggle" class="gpu-toggle" role="switch" aria-label="GPU acceleration" aria-checked="false" aria-describedby="gpu-status gpu-details" disabled><span class="switch" aria-hidden="true"></span><span id="gpu-toggle-label">Off</span></button><p id="gpu-status" role="status">Checking for a GPU…</p><span id="gpu-details" class="gpu-scope" hidden></span><span class="gpu-scope">Replies only · speech stays on CPU</span></div>
     <div class="conversation-log" id="conversation-log" role="log" aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions" tabindex="0"><div id="conversation-empty" class="conversation-empty"><span class="conversation-spark" aria-hidden="true">✳</span><h3>A voice on the other side.</h3><p>Tell Milo about your day, ask a question,<br>or just say hello.</p><span>Your conversation stays in this tab.</span></div></div>
     <div class="conversation-feedback"><span class="conversation-light" aria-hidden="true"></span><p id="conversation-status" role="status">Start talking, or send a little note below.</p></div>
     <div class="mic-controls">
@@ -97,6 +97,9 @@ export function createConversation(options: {
     el('gpu-toggle-label').textContent = gpuEnabled ? 'On' : 'Off';
     el('gpu-device').textContent = acceleration?.deviceName || (acceleration?.status === 'unavailable' ? 'Compatible GPU unavailable' : 'Checking compatible hardware…');
     el('gpu-device').title = acceleration?.message || '';
+    const gpuDetails = el('gpu-details');
+    gpuDetails.textContent = acceleration?.deviceInfo || '';
+    gpuDetails.hidden = !acceleration?.deviceInfo;
     el('gpu-status').textContent = gpuError || (switchingGpu ? gpuEnabled ? 'Switching to GPU…' : 'Returning to CPU…' : !acceleration || acceleration.status === 'detecting' ? 'Checking for a GPU…' : gpuEnabled ? health?.chat.status === 'ready' ? readyDeviceLabel : 'Preparing GPU replies…' : acceleration.status === 'unavailable' || acceleration.status === 'error' ? acceleration.message || 'GPU unavailable. CPU replies are available.' : acceleration.message || 'CPU active · GPU is optional');
     el('conversation-status').textContent = detail;
     container.dataset.state = state;

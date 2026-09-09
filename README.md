@@ -61,6 +61,8 @@ Speech and transcription use the device CPU through WebAssembly in every mode. T
 
 Milo detects browser WebGPU capabilities, requests acceleration only when enabled and reports GPU use only after the loader confirms model layers were offloaded. A browser with an unavailable or unsupported adapter stays on CPU. GPU errors surface a message and recover on the local CPU where possible; there is no cloud inference fallback.
 
+The GPU label uses the identity exposed by WebGPU. Some browsers reveal only a vendor (for example, “NVIDIA GPU”) and hide the exact model for privacy. Milo explains that limitation; a missing card model does not mean acceleration failed. “GPU active” requires confirmed model offloading, independently of the displayed name.
+
 Switching off interrupts the active reply, disposes the worker's model context and reloads the selected mode on CPU. The transcript stays in the tab. Model weights remain cached. GPU allocations belong to the browser runtime; Milo does not reserve the GPU permanently or install a driver, toolkit or system service. The avatar may still use the GPU for rendering.
 
 | Environment | Practical support boundary |

@@ -1,12 +1,13 @@
 import type { ChatMessage, ConversationMemory } from '../conversation-memory';
 import type { ChatMode, ChatProfile, ChatRoute } from './chat-policy';
+import { describeGpuAdapter } from './gpu-info';
 export { DEVICE_CHAT_MODELS } from './chat-models';
 export type { ChatMode, ChatProfile, ChatRoute } from './chat-policy';
 
 type Reply = { text: string; profile: ChatProfile; mode: ChatMode; device: 'cpu' | 'gpu'; backend: 'wasm' | 'webgpu'; model: string; generationMs: number; firstChunkMs: number | null };
 type Options = { profile?: ChatMode; targetProfile?: ChatProfile; memory?: ConversationMemory; signal?: AbortSignal; onRouting?: (route: ChatRoute) => void; onTextChunk?: (text: string) => void };
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; cleanup: () => void; generating: () => void; options: Options };
-type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'webgpu' | null; deviceName: string | null; revision: number; message: string };
+type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'webgpu' | null; deviceName: string | null; deviceInfo?: string | null; revision: number; message: string };
 type EngineHealth = { status: string; progress: number; message: string; profile: ChatMode; selectedModel: ChatProfile | null; model: string; device: 'cpu' | 'gpu' | null; gpuLayers?: number; cpuThreads?: number; queueDepth: number; residency: 'single'; residencyReason: string; acceleration: Acceleration };
 
 class DeviceChatClient {
@@ -96,14 +97,15 @@ class DeviceChatClient {
 
   private detectGpu() {
     this.detection ??= (async () => {
-      type Adapter = { features: { has(name: string): boolean }; isFallbackAdapter?: boolean; info?: { description?: string } };
+      type Adapter = Parameters<typeof describeGpuAdapter>[0];
       const gpu = (navigator as unknown as { gpu?: { requestAdapter(options: { powerPreference: string; forceFallbackAdapter: boolean }): Promise<Adapter | null> } }).gpu;
-      let available = false;
+      let details = describeGpuAdapter(null);
       try {
         const adapter = await gpu?.requestAdapter({ powerPreference: 'high-performance', forceFallbackAdapter: false });
-        available = !!adapter && !adapter.isFallbackAdapter && adapter.features.has('shader-f16') && !/swiftshader|llvmpipe/i.test(adapter.info?.description ?? '');
+        details = describeGpuAdapter(adapter);
       } catch { /* CPU remains usable when browser GPU permission/driver fails. */ }
-      this.state.acceleration = { ...this.state.acceleration, available, backend: available ? 'webgpu' : null, deviceName: available ? 'Browser WebGPU' : null,
+      const { available } = details;
+      this.state.acceleration = { ...this.state.acceleration, ...details, backend: available ? 'webgpu' : null,
         status: this.state.acceleration.status === 'switching' ? 'switching' : available ? 'ready' : 'unavailable',
         message: available ? 'Compatible browser GPU detected. Turn on to accelerate replies on this device.' : 'A compatible browser GPU is unavailable. Replies run on this device’s CPU.' };
     })();

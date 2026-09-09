@@ -55,7 +55,7 @@ async function setup(page: Page, unsupported = false) {
       dispose: () => { health.tts = initial(); health.stt = initial(); state.disposed++; },
     };
     (window as any).__chatClient = {
-      health: () => ({ ...health.chat, acceleration: { ...health.chat.acceleration, available: state.gpuAvailable, backend: state.gpuAvailable ? 'webgpu' : null, deviceName: state.gpuAvailable ? 'Browser WebGPU' : null } }),
+      health: () => ({ ...health.chat, acceleration: { ...health.chat.acceleration, available: state.gpuAvailable, backend: state.gpuAvailable ? 'webgpu' : null, deviceName: state.gpuAvailable ? 'NVIDIA GPU · WebGPU' : null, deviceInfo: state.gpuAvailable ? 'Your browser hides the exact GPU model name.' : null } }),
       initialize: async ({ profile, signal }: any) => {
         state.initialize.push(`chat:${profile}`); Object.assign(health.chat, { status: 'loading', progress: 45, profile });
         await gate('Initialize', signal); signal?.throwIfAborted();
@@ -235,6 +235,9 @@ test('browser GPU can return to CPU while warming or answering without losing Hy
   await expect(page.locator('#gpu-status')).toContainText('CPU');
   await gpu.click();
   await expect(page.locator('#gpu-status')).toHaveText('GPU active');
+  await expect(page.locator('#gpu-device')).toHaveText('NVIDIA GPU · WebGPU');
+  await expect(page.locator('#gpu-details')).toBeVisible();
+  await expect(page.locator('#gpu-details')).toHaveText('Your browser hides the exact GPU model name.');
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('device-mobile-gpu.png'), fullPage: true });
