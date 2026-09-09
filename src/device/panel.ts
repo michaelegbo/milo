@@ -33,6 +33,14 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     render();
   }).catch(() => {});
 
+  /** Which of the files this mode needs are already in browser storage. */
+  function describeSaved(): 'all' | 'some' | 'none' | 'unknown' {
+    if (!saved) return 'unknown';
+    const profile = deviceHealth().chat.profile;
+    const needed = conversation ? usesCodex() ? ['tts', 'stt'] as const : ['tts', 'stt', profile === 'quality' ? 'quality' : 'fast'] as const : ['tts'] as const;
+    return needed.every(key => saved![key].ready) ? 'all' : needed.some(key => saved![key].found > 0) ? 'some' : 'none';
+  }
+
   function render() {
     const health = deviceHealth();
     const profile = health.chat.profile;
@@ -48,9 +56,8 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
       el('device-download-size').textContent = 'About 172 MB total · no local reply model needed';
     }
     container.querySelector('.device-privacy')!.textContent = usesCodex() ? 'Voice recordings stay on your device. Messages and conversation context go to OpenAI through Milo for ChatGPT replies.' : 'Your words, voice recordings, and replies stay in this browser. No server inference.';
-    const needed = conversation ? usesCodex() ? ['tts', 'stt'] as const : ['tts', 'stt', profile === 'quality' ? 'quality' : 'fast'] as const : ['tts'] as const;
-    const allSaved = !!saved && needed.every(key => saved![key].ready);
-    const someSaved = !!saved && needed.some(key => saved![key].found > 0);
+    const savedState = describeSaved();
+    const allSaved = savedState === 'all', someSaved = savedState === 'some';
     if (allSaved) {
       el('device-setup-description').textContent = 'Your downloads are saved. Start Milo to load them back into memory.';
       el('device-download-size').textContent = conversation && !usesCodex() && profile === 'hybrid' && !saved!.quality.ready ? 'Saved models ready to start · deeper replies may need a download' : 'Saved models · no model download needed';
@@ -144,6 +151,11 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
   render(); void checkSaved();
   return {
     setConversation(value: boolean) { conversation = value; error = ''; render(); },
+    /** The same consent action as the setup button, so other panels can offer it in place. */
+    start() { const button = el<HTMLButtonElement>('device-start'); if (!button.disabled) button.click(); },
+    describe() {
+      return { supported, capability: supported ? '' : capability, saved: describeSaved(), busy: !!preparing || deleting || (checking && !saved), size: el('device-download-size').textContent || '' };
+    },
     dispose() { disposed = true; window.removeEventListener('focus', onFocus); preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
   };
 }

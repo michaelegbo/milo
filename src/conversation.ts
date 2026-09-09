@@ -1,6 +1,6 @@
 import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
-import { usesCodex } from './reply-provider';
+import { codexStatus, usesCodex } from './reply-provider';
 import { createCodexPanel } from './codex-panel';
 import { MicrophoneRecorder } from './microphone';
 import type { SpeechPlayer } from './speech';
@@ -20,12 +20,14 @@ export function createConversation(options: {
   setVoice: (voice: string) => void;
   onSpeech: (text: string) => void;
   onStateChange: () => void;
+  /** Browser edition only: the setup panel's consent action and what it would do. */
+  device?: { start(): void; describe(): { supported: boolean; capability: string; saved: 'all' | 'some' | 'none' | 'unknown'; busy: boolean; size: string } };
 }) {
   const { container, player } = options;
   container.innerHTML = `
     <div class="panel-heading"><div><span class="eyebrow">A TWO-WAY CONVERSATION</span><h2 id="conversation-heading">Hello again, human.</h2></div><button id="new-conversation" class="text-button" title="Clear this conversation">New chat</button></div>
     <div id="conversation-engines" class="conversation-engines" role="status">Preparing your local conversation…</div>
-    <button id="conversation-retry" class="retry-button" hidden>Try loading again</button>
+    <div id="conversation-next" class="conversation-next" role="region" aria-labelledby="conversation-next-heading" hidden><span id="conversation-next-heading" class="eyebrow">BEFORE WE TALK</span><p id="conversation-next-text"></p><button id="conversation-next-action" class="primary-button" type="button" hidden></button></div>
     <div class="conversation-model"><label for="conversation-model">MILO’S MIND</label><select id="conversation-model"><option value="fast">Fast · Qwen 1.5B</option><option value="quality">Better answers · Qwen 4B</option><option value="hybrid">Hybrid · Adapts to you</option></select><span id="model-hint">Quick, everyday conversation.</span><div id="conversation-route" class="conversation-route" role="status" hidden><span id="route-label">Chooses for each reply</span><span id="route-reason">Simple chat stays quick. Complex questions get more thought.</span></div></div>
     <div class="conversation-acceleration"><div><span class="gpu-heading">GPU acceleration</span><span id="gpu-device">Checking compatible hardware…</span></div><button id="gpu-toggle" class="gpu-toggle" role="switch" aria-label="GPU acceleration" aria-checked="false" aria-describedby="gpu-status gpu-details" disabled><span class="switch" aria-hidden="true"></span><span id="gpu-toggle-label">Off</span></button><p id="gpu-status" role="status">Checking for a GPU…</p><span id="gpu-details" class="gpu-scope" hidden></span><span class="gpu-scope">Replies only · speech stays on CPU</span></div>
     <div class="conversation-log" id="conversation-log" role="log" aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions" tabindex="0"><div id="conversation-empty" class="conversation-empty"><span class="conversation-spark" aria-hidden="true">✳</span><h3>A voice on the other side.</h3><p>Tell Milo about your day, ask a question,<br>or just say hello.</p><span>Your conversation stays in this tab.</span></div></div>
@@ -126,12 +128,48 @@ export function createConversation(options: {
       ['Whisper', health.stt], [remote ? 'ChatGPT' : (health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], ['Kokoro', health.tts],
     ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'unloaded' ? 'not loaded' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
     el('conversation-engines').title = 'All inference stays on this computer. Conversation replies can use the GPU; listening and speech use CPU. Models are cached for later use.';
-    if (isDeviceOnly) el('conversation-engines').title = 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. Choose Download & start above to prepare them. No server fallback.';
+    if (isDeviceOnly) el('conversation-engines').title = 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. The step above prepares them. No server fallback.';
     if (remote) el('conversation-engines').title = 'Voice and listening stay on this device. Messages and conversation context are sent to OpenAI through Milo’s hosted connection.';
     const emptyNote = container.querySelector<HTMLElement>('.conversation-empty > span:last-child');
     if (emptyNote) emptyNote.textContent = remote ? 'ChatGPT receives this conversation’s text.' : 'Your conversation stays in this tab.';
-    el('conversation-retry').hidden = !healthError && !Object.values(health ?? {}).some(engine => engine.status === 'error');
+    renderNextStep(remote);
     options.onStateChange();
+  }
+  let nextAction: (() => void) | undefined;
+  let codexLogin: (() => void) | undefined;
+  const retry = () => { if (options.device) options.device.start(); else void prepare(); };
+  /** Name the one thing standing between the visitor and a conversation, and offer it in place. */
+  function renderNextStep(remote: boolean) {
+    const device = options.device?.describe();
+    const engines: Engine[] = health ? remote ? [health.tts, health.stt] : [health.tts, health.stt, health.chat] : [];
+    const names = ['Voice', 'Listening', 'Replies'];
+    const failed = engines.find(engine => engine.status === 'error');
+    const unloaded = engines.some(engine => engine.status === 'unloaded');
+    const loading = engines.some(engine => engine.status === 'loading') || health?.chat.acceleration?.status === 'switching' || gpuIntent !== undefined;
+    const progress = engines.map((engine, i) => `${names[i]} ${engine.status === 'ready' ? 'ready' : engine.status === 'loading' ? Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'preparing' : 'waiting'}`).join(' · ');
+    let step: { text: string; action?: string; run?: () => void; busy?: boolean } | undefined;
+    if (healthError) step = { text: healthError, action: 'Try loading again', run: retry, busy: device?.busy };
+    else if (!health) step = undefined;
+    else if (device && !device.supported) step = { text: device.capability };
+    else if (failed) step = { text: `${failed.message || 'Milo could not load on this device.'} Close other busy tabs, then try again.`, action: 'Try loading again', run: retry, busy: device?.busy };
+    else if (remote && health.chat.status !== 'ready') {
+      const codex = codexStatus();
+      step = !codex?.signedIn
+        ? { text: `Replies come from your ChatGPT account. Sign in on OpenAI’s page; Milo connects automatically when you return.${unloaded ? ' Milo’s voice and listening are prepared on this device afterwards.' : ''}`, action: codex?.login ? 'Show the sign-in code' : 'Sign in to ChatGPT ↗', run: () => codexLogin?.() }
+        : { text: 'Your ChatGPT account returned no usable models. Choose a different account or switch the reply provider to On this device.' };
+    } else if (loading || device?.busy) step = { text: `Milo is getting ready on this device: ${progress}. You can type as soon as replies are ready.` };
+    else if (unloaded && device) {
+      const text = remote ? 'Prepare Milo’s voice and listening on this device. Your ChatGPT account provides the replies.'
+        : device.saved === 'all' ? 'Your models are already saved in this browser. Load them to start talking; nothing downloads again.'
+          : device.saved === 'some' ? 'Some files are already saved here. Milo downloads only what is missing, then starts.'
+            : 'Milo needs its voice, listening and reply models on this device. Nothing you say leaves this browser.';
+      step = { text: `${text} ${device.size}.`, action: device.saved === 'all' ? 'Load saved models ↘' : device.saved === 'some' ? 'Download missing files & prepare ↘' : 'Download & prepare ↘', run: options.device!.start, busy: device.busy };
+    }
+    nextAction = step?.run;
+    el('conversation-next').hidden = !step;
+    el('conversation-next-text').textContent = step?.text ?? '';
+    const action = el<HTMLButtonElement>('conversation-next-action');
+    action.hidden = !step?.action; action.textContent = step?.action ?? ''; action.disabled = !!step?.busy;
   }
   function setState(next: State, text?: string) { state = next; detail = text ?? `${labels[next]}…`; render(); }
   function setLevel(level: number) {
@@ -441,7 +479,7 @@ export function createConversation(options: {
       // A cancelled worker may still be draining when a profile was selected.
       // Retry that selection once it is idle, instead of leaving the UI stranded.
       if (profilePending && health?.chat.profile && health.chat.profile !== profile && health.chat.status !== 'loading' && !(health.chat.queueDepth ?? 0) && ['idle', 'error'].includes(state)) void prepare();
-    } catch { if (epoch === gpuEpoch) { healthError = isDeviceOnly ? 'The browser engines could not start. Use model setup above to try again.' : 'Local conversation is offline. Start the app, then try loading again.'; health = undefined; } }
+    } catch { if (epoch === gpuEpoch) { healthError = isDeviceOnly ? 'The browser engines could not start. Try loading again below.' : 'Local conversation is offline. Start the app, then try loading again.'; health = undefined; } }
     finally { checking = false; if (visible) render(); }
   }
   async function prepare() {
@@ -455,7 +493,7 @@ export function createConversation(options: {
       if (!visible || token !== version) return;
       acceptHealth(result); healthError = '';
       if (!health?.chat.profile || health.chat.profile === profile) profilePending = false;
-      if (!voiceReady() && ['idle', 'error'].includes(state)) setState('idle', isDeviceOnly ? 'Choose Download & start conversation above to prepare these models on your device.' : profile === 'hybrid' ? 'Preparing Hybrid. Milo will choose the right model for each reply.' : profile === 'quality' ? 'Preparing the 4B model. First use downloads 2.5 GB; later runs use the cache.' : 'Preparing your local engines. First use downloads the models; later runs use the cache.');
+      if (!voiceReady() && ['idle', 'error'].includes(state)) setState('idle', isDeviceOnly ? 'Milo needs a little setup first. Follow the step above.' : profile === 'hybrid' ? 'Preparing Hybrid. Milo will choose the right model for each reply.' : profile === 'quality' ? 'Preparing the 4B model. First use downloads 2.5 GB; later runs use the cache.' : 'Preparing your local engines. First use downloads the models; later runs use the cache.');
       render();
     } catch (error) { if (visible && token === version) { healthError = error instanceof Error ? error.message : 'Cannot prepare the local engines.'; render(); } }
     finally { preparing = false; }
@@ -481,7 +519,7 @@ export function createConversation(options: {
   const onDeviceChange = () => { if (visible) void refreshDevices(); };
   navigator.mediaDevices?.addEventListener('devicechange', onDeviceChange);
   el('conversation-end').addEventListener('click', end);
-  el('conversation-retry').addEventListener('click', () => { if (isDeviceOnly) { document.getElementById('device-setup')?.scrollIntoView({ block: 'center' }); document.getElementById('device-start')?.focus(); } else void prepare(); });
+  el('conversation-next-action').addEventListener('click', () => { nextAction?.(); render(); });
   el('new-conversation').addEventListener('click', () => {
     end(); messages.length = 0; facts.clear(); summary = ''; summarizedThrough = 0;
     el('conversation-log').replaceChildren(); renderMemory(); setState('idle', 'A fresh conversation. Say hello or type a message.');
@@ -501,6 +539,7 @@ export function createConversation(options: {
   const providerContainer = document.createElement('div'); providerContainer.className = 'reply-provider-panel';
   container.querySelector('.conversation-model')!.before(providerContainer);
   const codexPanel = createCodexPanel(providerContainer, () => { stopWork(); gpuRequest?.abort(); gpuIntent = undefined; gpuEpoch++; health = undefined; setState('idle', 'Reply provider changed. Prepare the selected voice and connection to continue.'); });
+  codexLogin = () => codexPanel.login();
   const onProviderChange = () => { gpuEpoch++; void checkHealth().then(() => { if (visible) void prepare(); }); };
   window.addEventListener('milo-provider-change', onProviderChange);
   const onDeviceHealth = () => { if (isDeviceOnly) void checkHealth(); };
