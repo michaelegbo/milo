@@ -163,6 +163,34 @@ reused after a restart; stopping does not promise an entirely offline page load.
 Clearing site data removes the model cache. Conversation text is not a shared
 server session and is not a durable chat backup.
 
+## Continuous integration and automatic deploys
+
+`.github/workflows/ci.yml` runs on every push and pull request. It installs the
+pinned dependencies, runs the deterministic server tests, builds the browser
+edition with the production flags, checks that the nine preset clips are in the
+build, and runs the browser suites that need no model weights. The suites that
+drive real Kokoro, Whisper or Qwen weights are not run there; keep running them
+locally before a release, as described below.
+
+When main is green, the `deploy` job redeploys the public site. It needs one
+repository secret, `DOKPLOY_DEPLOY_WEBHOOK`, holding the webhook URL of the
+Dokploy `milo` service (Settings -> Secrets and variables -> Actions). Without
+that secret the job warns and does nothing, so pushes stay green until it is
+configured. Treat the URL as a credential: anyone holding it can trigger a
+deploy, and the workflow never prints it or the response body.
+
+The job then waits up to fifteen minutes for the site to serve the exact bundle
+filename that this commit produced. Vite names bundles by content, so that check
+confirms the deployed code rather than a status string, and a stale build fails
+the job while the previous version keeps serving. `MILO_BUILD_REVISION` still
+comes from the Dokploy environment, so update it there when you want
+`release.json` to report the commit; the job reports a mismatch as a note rather
+than a failure.
+
+Deploys are serialized through one concurrency group, and the job is attached to
+the `production` environment, so required reviewers can be added there when a
+deploy should wait for a human.
+
 ## Deployment verification and recovery
 
 `GET /healthz` is the container's static liveness check. `GET /release.json`

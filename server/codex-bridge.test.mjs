@@ -99,7 +99,9 @@ test('stdio adapter isolates credentials, disables tools, denies RPC requests an
     }
     queueMicrotask(() => write({ id: req.id, result: req.method === 'thread/start' ? { thread: { id: 'thread' } } : req.method === 'turn/start' ? { turn: { id: 'turn' } } : {} }));
   });
-  const client = new CodexClient({ directory, spawnProcess: (...args) => { launch = args; return child; } });
+  // The spawn is mocked, so the binary only has to resolve; this keeps the test
+  // hermetic on machines and CI runners without the Codex CLI installed.
+  const client = new CodexClient({ binary: process.execPath, directory, spawnProcess: (...args) => { launch = args; return child; } });
   t.after(() => client.stop());
   const text = await client.reply({ model: 'test-model', effort: 'low', instructions: 'You are Milo.', text: 'Hello', signal: AbortSignal.timeout(1000), onText() {} });
   assert.equal(text, 'Hello.');

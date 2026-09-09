@@ -1,0 +1,147 @@
+name: CI
+
+# Verifies every push and pull request, then redeploys the public browser
+# edition when main is green. Model-dependent suites (real Kokoro, Whisper and
+# Qwen) need multi-gigabyte weights and are not run here; see docs/hosting.md.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Building the browser edition never needs the native inference runtimes.
+  NODE_LLAMA_CPP_SKIP_DOWNLOAD: 'true'
+  ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+
+jobs:
+  verify:
+    name: Type-check, build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      bundle: ${{ steps.build.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install pinned dependencies
+        run: npm ci --ignore-scripts --include=optional --no-audit --no-fund
+
+      - name: Deterministic server tests
+        run: node --test server/*.test.mjs
+
+      - name: Build the browser edition
+        id: build
+        env:
+          VITE_MILO_DEVICE_ONLY: '1'
+          VITE_AUDIO_MODEL_BASE: /models/
+        run: |
+          node scripts/prepare-browser-assets.mjs
+          npm run build
+          # Vite hashes bundles by content, so this name identifies exactly this
+          # source. The deploy job looks for it on the live site.
+          bundle=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' dist/index.html | head -1)
+          test -n "$bundle"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "Built $bundle" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Confirm the presets ship with the build
+        run: |
+          count=$(ls dist/presets/*.mp3 2>/dev/null | wc -l)
+          test "$count" -eq 9 || { echo "::error::Expected 9 preset clips, found $count."; exit 1; }
+
+      - name: Install Chrome for Playwright
+        run: npx playwright install --with-deps chrome
+
+      - name: Browser tests that need no models
+        # The remaining suites drive real Kokoro/Whisper/Qwen weights or a running
+        # device build, so they stay a local and pre-release step.
+        run: >
+          npx playwright test
+          tests/avatar-expression.spec.ts
+          tests/conversation-memory.spec.ts
+          tests/gpu-info.spec.ts
+          tests/streaming-speech.spec.ts
+          tests/talking-motion.spec.ts
+          --reporter=line
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  deploy:
+    name: Redeploy milo.seemplifyai.com
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Trigger the Dokploy redeploy
+        id: trigger
+        env:
+          WEBHOOK: ${{ secrets.DOKPLOY_DEPLOY_WEBHOOK }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::DOKPLOY_DEPLOY_WEBHOOK is not set, so nothing was deployed. Add the Dokploy service webhook as a repository secret to enable automatic deploys."
+            {
+              echo "### Deploy skipped"
+              echo
+              echo "No \`DOKPLOY_DEPLOY_WEBHOOK\` secret is configured. Copy the webhook URL from the Dokploy \`milo\` service and add it under Settings → Secrets and variables → Actions."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "triggered=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The URL is a credential: never echo it or the response body.
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST --max-time 60 "$WEBHOOK")
+          echo "Dokploy responded with HTTP $code."
+          case "$code" in
+            2*) echo "triggered=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Dokploy rejected the deploy request (HTTP $code)."; exit 1 ;;
+          esac
+
+      - name: Wait for the new bundle to go live
+        if: steps.trigger.outputs.triggered == 'true'
+        env:
+          BUNDLE: ${{ needs.verify.outputs.bundle }}
+        run: |
+          site=https://milo.seemplifyai.com
+          echo "Waiting for $BUNDLE at $site (up to 15 minutes)."
+          for attempt in $(seq 1 90); do
+            if curl -fsS --max-time 20 "$site/" | grep -q "$BUNDLE"; then
+              revision=$(curl -fsS --max-time 20 "$site/release.json" | grep -o '"revision":"[^"]*"' | cut -d'"' -f4)
+              {
+                echo "### Deployed"
+                echo
+                echo "- Bundle \`$BUNDLE\` from ${GITHUB_SHA} is live."
+                echo "- \`release.json\` reports \`${revision}\`."
+                if [ "$revision" != "$GITHUB_SHA" ]; then
+                  echo "- Note: that differs from this commit, so \`MILO_BUILD_REVISION\` in Dokploy is pinned to an older value. The served code is current; only the reported string is stale."
+                fi
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$BUNDLE did not appear within 15 minutes. Check the Dokploy build logs; the previous version is still serving."
+          exit 1

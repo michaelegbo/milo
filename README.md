@@ -182,6 +182,12 @@ The [hosting guide](docs/hosting.md) covers pinned Docker images, model provisio
 | `npm run preview` | Preview the chosen build with matching environment flags |
 | `npm test` | Deterministic Node tests and Playwright tests against configured local URLs |
 
+Every push and pull request runs `.github/workflows/ci.yml`: server tests, the
+production browser build and the browser suites that need no model weights. A
+green push to `main` redeploys the public site through a Dokploy webhook and
+waits until the site serves that commit's bundle. Model-dependent suites still
+run locally. See the [hosting guide](docs/hosting.md) for the required secret.
+
 ## Verification and limits
 
 Browser verification on 9 September 2026 generated a real Kokoro clip and transcribed the exact sentence with Whisper. It also loaded the real Fast model, streamed replies that used supplied memory, cancelled an active generation, reloaded from browser cache and verified that changed memory did not leak from an earlier context. Network capture recorded **zero external requests, zero uploads and no inference API requests** during those isolated device tests.
