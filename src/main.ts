@@ -138,9 +138,10 @@ function renderPlayback() {
   const busy = state === 'generating';
   const speaking = state === 'playing';
   const paused = state === 'paused';
+  const presetAvailable = settings.mode === 'presets' && settings.speed === 1;
   const speak = el<HTMLButtonElement>('speak');
   speak.innerHTML = `${icon(speaking ? 'pause' : busy ? 'wave' : 'play')}<span>${speaking ? 'Pause Milo' : paused ? 'Keep talking' : busy ? 'Finding Milo’s voice…' : 'Let Milo speak'}</span>`;
-  speak.disabled = busy || (!speaking && !paused && (health !== 'ready' || !currentText()));
+  speak.disabled = busy || (!speaking && !paused && ((!presetAvailable && health !== 'ready') || !currentText()));
   speak.classList.toggle('generating', busy);
   el<HTMLButtonElement>('stop').disabled = !(busy || speaking || paused);
   el<HTMLButtonElement>('download').disabled = !player.hasAudio;
@@ -150,7 +151,8 @@ function renderPlayback() {
   document.querySelector('.audio-strip')?.classList.toggle('is-playing', speaking);
   let status = health === 'ready' ? 'All set. Press play and meet your voice.' : health === 'loading' ? 'Preparing the voice. The first download can take a few minutes.' : health === 'error' ? healthMessage : 'Connecting to the local voice…';
   if (isDeviceOnly && health === 'unloaded') status = 'Choose Download & start voice above. Your words stay on this device.';
-  if (busy) status = 'Making your sentence on the CPU. The first one can take a little longer.';
+  if (presetAvailable) status = 'Press play to hear this sentence. No voice model download needed.';
+  if (busy) status = presetAvailable ? 'Opening Milo’s voice…' : 'Making your sentence on the CPU. The first one can take a little longer.';
   if (speaking) status = 'Milo is speaking. The mouth moves with the sound.';
   if (paused) status = 'Paused. Continue whenever you’re ready.';
   if (state === 'error') status = player.error;
@@ -228,6 +230,13 @@ el('speak').addEventListener('click', () => {
 async function speakStudio() {
   const { voice, speed, mode, selected } = settings;
   if (mode === 'presets' && speed === 1 && await player.speakClip(presetClipPath(selected, voice))) return;
+  if (health !== 'ready') {
+    player.stop();
+    player.state = 'error';
+    player.error = 'This audio clip could not load. Try play again, or prepare the voice model above.';
+    player.onChange();
+    return;
+  }
   await player.speakStream(splitSpeechText(activeText), voice, speed);
 }
 el('stop').addEventListener('click', () => player.stop());

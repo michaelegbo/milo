@@ -101,6 +101,29 @@ function expectPrivate(requests: string[]) {
   expect(requests.filter(url => new URL(url).port === '8790')).toEqual([]);
 }
 
+test('presets play before models load while custom speech still requires setup', async ({ page }) => {
+  const { errors } = await setup(page);
+  await expect(page.locator('#speak')).toBeEnabled();
+  await page.getByRole('button', { name: 'Let Milo speak', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pause Milo', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
+  await page.getByRole('button', { name: 'Stop speech', exact: true }).click();
+  await page.getByRole('slider', { name: 'Speech pace' }).fill('0.8');
+  await expect(page.locator('#speak')).toBeDisabled();
+  await page.getByRole('slider', { name: 'Speech pace' }).fill('1');
+  await expect(page.locator('#speak')).toBeEnabled();
+  await page.route('**/presets/*.mp3', route => route.fulfill({ status: 404 }));
+  await page.locator('#speak').click();
+  await expect(page.locator('#speech-status')).toContainText('This audio clip could not load');
+  await expect(page.locator('#speak')).toBeEnabled();
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  await page.getByRole('tab', { name: 'Write your own' }).click();
+  await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('A custom sentence.');
+  await expect(page.locator('#speak')).toBeDisabled();
+  expect(errors).toEqual([]);
+});
+
 async function enableConversation(page: Page) {
   await page.getByRole('tab', { name: 'Conversation' }).click();
   await page.getByRole('button', { name: /Download & start conversation/ }).click();
