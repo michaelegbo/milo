@@ -14,11 +14,16 @@ export async function apiFetch(path: string, init?: RequestInit): Promise<Respon
     if (hostedVoiceStatus() === 'unknown') await checkHostedVoice();
     if (usesHostedVoice()) {
       const body = typeof init?.body === 'string' ? JSON.parse(init.body) : {};
-      try { return await hostedSpeak(body, init?.signal ?? undefined); }
+      const signal = init?.signal ?? undefined;
+      try { return await hostedSpeak(body, signal); }
       catch (error) {
-        if (init?.signal?.aborted) throw error;
-        // The proxy is down or over quota: continue with Kokoro when it is loaded, otherwise say what to do.
-        if (!(await import('./device/transport')).deviceVoiceReady()) return Response.json({ message: `${(error as Error).message} Download the on-device voice above to keep talking.` }, { status: 503 });
+        if (signal?.aborted) throw error;
+        // A restarting proxy or a dropped connection deserves one quick retry before anyone is told anything.
+        if ((await checkHostedVoice(true)) === 'ready') {
+          try { return await hostedSpeak(body, signal); } catch (again) { if (signal?.aborted) throw again; }
+        }
+        // Still failing: continue with Kokoro when it is loaded, otherwise say what to do next.
+        if (!(await import('./device/transport')).deviceVoiceReady()) return Response.json({ message: 'The hosted voice did not respond. Try again in a moment, or load the on-device voice above to keep talking.' }, { status: 503 });
       }
     }
   }

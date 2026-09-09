@@ -538,6 +538,6 @@ test('the hosted voice speaks without any download, streams PCM, and explains it
   await page.unroute('**/api/voice/speak');
   await page.route('**/api/voice/speak', route => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ message: 'The hosted voice did not respond.' }) }));
   await page.getByRole('button', { name: 'Let Milo speak' }).click();
-  await expect(page.locator('#speech-status')).toContainText('Download the on-device voice');
+  await expect(page.locator('#speech-status')).toContainText('load the on-device voice');
   expectPrivate(requests); expect(errors).toEqual([]);
 });
