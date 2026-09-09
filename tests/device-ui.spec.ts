@@ -540,3 +540,31 @@ test('the hosted voice speaks without any download, streams PCM, and explains it
   await expect(page.locator('#speech-status')).toContainText('load the on-device voice');
   expectPrivate(requests); expect(errors).toEqual([]);
 });
+
+test('an iPhone is offered Fast only and never starts loading a model it cannot hold', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'userAgent', { get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/140.0.0.0 Mobile/15E148 Safari/604.1' });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => undefined });
+  });
+  const { requests, errors } = await setup(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('tab', { name: 'Conversation' }).click();
+  const mind = page.getByLabel('MILO’S MIND', { exact: true });
+  await expect(mind).toHaveValue('fast');
+  await expect(mind.locator('option[value=quality]')).toBeDisabled();
+  await expect(mind.locator('option[value=hybrid]')).toBeDisabled();
+  await expect(mind.locator('option[value=quality]')).toHaveText(/needs more memory/);
+  // Force the refused profile the way a stale saved preference or another tab could, and confirm the guard holds.
+  await page.evaluate(() => { const select = document.getElementById('conversation-model') as HTMLSelectElement; select.querySelector<HTMLOptionElement>('option[value=quality]')!.disabled = false; select.value = 'quality'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await expect(page.locator('#conversation-next-text')).toContainText('iPhone and iPad');
+  await expect(page.locator('#conversation-loading')).toBeHidden();
+  await expect(page.locator('#device-start')).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  await page.getByRole('button', { name: 'Use Fast instead' }).click();
+  await expect(mind).toHaveValue('fast');
+  // Choosing Fast is the go-ahead, so it prepares on its own.
+  await expect(page.locator('#conversation-start')).toBeEnabled();
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:fast']);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expectPrivate(requests); expect(errors).toEqual([]);
+});

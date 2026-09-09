@@ -2,13 +2,14 @@ import type { ChatMessage, ConversationMemory } from '../conversation-memory';
 import { clearStoredModels, holdModelStorage } from './model-storage';
 import { codexHealth, usesCodex } from '../reply-provider';
 import { checkHostedVoice, hostedVoiceStatus, usesHostedVoice } from '../voice-provider';
+import { deviceBudget } from './device-budget';
 
 export type DeviceProfile = 'fast' | 'quality' | 'hybrid';
 type AudioClient = (typeof import('./audio-client'))['deviceAudio'];
 type ChatClient = (typeof import('./chat-client'))['deviceChat'];
 let audio: AudioClient | undefined;
 let chat: ChatClient | undefined;
-let selectedProfile: DeviceProfile = 'quality';
+let selectedProfile: DeviceProfile = deviceBudget().allows('quality') ? 'quality' : 'fast';
 let voiceConsent = false, conversationConsent = false;
 let initializingProfile: DeviceProfile | undefined;
 let releaseStorage: (() => Promise<void>) | undefined;
@@ -49,6 +50,11 @@ export async function initializeDevice(conversation: boolean, signal: AbortSigna
   await unloadOperation;
   if (deleting) throw new Error('Wait for model deletion to finish before starting Milo.');
   const profile = selectedProfile;
+  if (conversation && !usesCodex()) {
+    // A model the tab cannot hold is refused here, whichever button or automatic path asked for it.
+    const budget = deviceBudget();
+    if (!budget.allows(profile)) throw new Error(budget.reason(profile));
+  }
   if (!globalThis.isSecureContext || !globalThis.crossOriginIsolated || typeof WebAssembly === 'undefined' || typeof Worker === 'undefined') {
     throw new Error('This browser cannot start local AI here. Use a current desktop browser with a secure connection and cross-origin isolation. Your words will not be sent to a server.');
   }

@@ -1,8 +1,9 @@
-import { deleteDeviceModels, deviceHealth, deviceVoiceReady, initializeDevice, unloadDevice } from './transport';
+import { deleteDeviceModels, deviceHealth, deviceVoiceReady, initializeDevice, unloadDevice, type DeviceProfile } from './transport';
 import { storedModels } from './model-storage';
 import { inspectSavedDownloads, type SavedDownloads } from './saved-downloads';
 import { usesCodex } from '../reply-provider';
 import { usesHostedVoice } from '../voice-provider';
+import { deviceBudget } from './device-budget';
 
 /** Consent and recovery live beside the studio, before any model is requested. */
 export function createDevicePanel(container: HTMLElement, onStop: () => void) {
@@ -53,6 +54,8 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     const failed = engines.find(([, value]) => value.status === 'error');
     const loading = engines.find(([, value]) => value.status === 'loading');
     el('device-setup-description').textContent = conversation ? profile === 'hybrid' ? 'Simple turns stay quick. Deeper questions load the stronger model on this device.' : profile === 'quality' ? 'Make room for Milo’s larger reply model. This can be demanding on smaller devices.' : 'Download Milo’s voice, ears, and quick replies to chat right here.' : 'Download the voice once, then let Milo do the talking.';
+    const budget = deviceBudget();
+    if (conversation && !usesCodex() && !budget.allows(profile as DeviceProfile)) el('device-setup-description').textContent = budget.reason(profile as DeviceProfile);
     el('device-download-size').textContent = conversation ? profile === 'fast' ? hosted ? 'About 1.2 GB total on first use' : 'About 1.3 GB total on first use' : profile === 'hybrid' ? hosted ? 'About 1.2 GB to start · up to 3.7 GB with deeper replies' : 'About 1.3 GB to start · up to 3.8 GB with deeper replies' : hosted ? 'About 2.6 GB total on first use' : 'About 2.7 GB total on first use' : hosted ? 'No download needed · voice streams from Deepgram' : 'About 92 MB on first use';
     if (conversation && usesCodex()) {
       el('device-setup-description').textContent = 'Prepare Milo’s voice and listening here. Your ChatGPT account provides the replies.';
@@ -74,7 +77,7 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     el<HTMLButtonElement>('device-check-saved').disabled = checking || deleting || !!preparing;
     const start = el<HTMLButtonElement>('device-start');
     start.textContent = preparing || loading ? 'Preparing on your device…' : ready ? 'Ready on this device ✓' : error || failed ? 'Try loading again ↘' : checking && !saved ? 'Checking saved downloads…' : allSaved ? conversation ? 'Start saved conversation ↘' : 'Start saved voice ↘' : someSaved ? 'Download missing files & start ↘' : conversation ? 'Download & start conversation ↘' : 'Download & start voice ↘';
-    start.disabled = (checking && !saved) || deleting || !supported || !!preparing || !!loading || ready;
+    start.disabled = (checking && !saved) || deleting || !supported || !!preparing || !!loading || ready || (conversation && !usesCodex() && !budget.allows(profile as DeviceProfile));
     // The studio already speaks through Deepgram; Kokoro stays available as an optional fallback for offline use.
     const optionalVoice = !conversation && hosted && supported && !preparing && !loading && !failed && !error;
     if (optionalVoice) {

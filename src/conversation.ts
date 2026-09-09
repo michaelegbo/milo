@@ -2,6 +2,7 @@ import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
 import { codexStatus, usesCodex } from './reply-provider';
 import { usesHostedVoice, voiceLabel } from './voice-provider';
+import { deviceBudget } from './device/device-budget';
 import { createCodexPanel } from './codex-panel';
 import { MicrophoneRecorder } from './microphone';
 import type { SpeechPlayer } from './speech';
@@ -55,7 +56,8 @@ export function createConversation(options: {
   let state: State = 'idle', detail = 'Start talking, or send a little note below.';
   let visible = false, version = 0, ownsPlayback = false, loop = false, receivedReply = false;
   let health: Health | undefined, healthError = '', checking = false, preparing = false, profilePending = false;
-  let profile: ChatMode = 'quality';
+  const budget = deviceBudget();
+  let profile: ChatMode = budget.allows('quality') ? 'quality' : 'fast';
   let gpuIntent: boolean | undefined, gpuRevision: number | undefined, gpuEpoch = 0, gpuError = '';
   let gpuRequest: AbortController | undefined;
   let replyRoute: ReplyRoute | undefined;
@@ -78,7 +80,9 @@ export function createConversation(options: {
     const remote = usesCodex();
     const modeSelect = el<HTMLSelectElement>('conversation-model');
     modeSelect.options[0].text = remote ? 'Fast · Less thought' : 'Fast · Qwen 1.5B';
-    modeSelect.options[1].text = remote ? 'Better answers · More thought' : 'Better answers · Qwen 4B';
+    modeSelect.options[1].text = remote ? 'Better answers · More thought' : budget.allows('quality') ? 'Better answers · Qwen 4B' : 'Better answers · needs more memory';
+    modeSelect.options[2].text = remote ? 'Hybrid · Adapts to you' : budget.allows('hybrid') ? 'Hybrid · Adapts to you' : 'Hybrid · needs more memory';
+    if (isDeviceOnly) for (const option of modeSelect.options) { const blocked = !remote && !budget.allows(option.value as ChatMode); option.disabled = blocked; option.title = blocked ? budget.reason(option.value as ChatMode) : ''; }
     for (const option of el<HTMLSelectElement>('conversation-voice').options) option.text = voiceLabel(option.value).split(' · ')[0];
     const start = el<HTMLButtonElement>('conversation-start');
     start.textContent = state === 'listening' ? 'Send voice message' : ['transcribing', 'thinking', 'voicing'].includes(state) ? `${labels[state]}…` : micMuted ? 'Unmute & talk' : state === 'speaking' ? 'Interrupt & talk' : 'Start conversation';
@@ -154,7 +158,8 @@ export function createConversation(options: {
     const unloaded = engines.some(engine => engine.status === 'unloaded');
     const loading = engines.some(engine => engine.status === 'loading') || health?.chat.acceleration?.status === 'switching' || gpuIntent !== undefined;
     const preparing = !!device?.preparing;
-    const settled = !!health && health.chat.profile === profile;
+    const refused = device && !remote && !budget.allows(profile);
+    const settled = !!health && health.chat.profile === profile && !refused;
     if (device && !remote && visible && settled && !preparing && !loading && !failed && !healthError && device.supported && unloaded && !autoLoading && (switchRequested || (device.saved === 'all' && !autoLoadDeclined))) {
       // Saved files load without a click. A first download still waits for consent unless the visitor just chose a model.
       autoLoading = true; switchRequested = false; options.device!.start();
@@ -163,7 +168,8 @@ export function createConversation(options: {
     renderLoadingModal(preparing, engines.map((engine, i) => [names[i], engine] as const), failed);
     const progress = engines.map((engine, i) => `${names[i]} ${engine.status === 'ready' ? 'ready' : engine.status === 'loading' ? Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'preparing' : 'waiting'}`).join(' · ');
     let step: { text: string; action?: string; run?: () => void; busy?: boolean } | undefined;
-    if (healthError) step = { text: healthError, action: 'Try loading again', run: retry, busy: device?.busy };
+    if (refused) step = { text: budget.reason(profile), action: budget.allows('fast') ? 'Use Fast instead' : undefined, run: () => { const select = el<HTMLSelectElement>('conversation-model'); select.value = 'fast'; select.dispatchEvent(new Event('change', { bubbles: true })); } };
+    else if (healthError) step = { text: healthError, action: 'Try loading again', run: retry, busy: device?.busy };
     else if (!health) step = undefined;
     else if (device && !device.supported) step = { text: device.capability };
     else if (failed) step = { text: `${failed.message || 'Milo could not load on this device.'} Close other busy tabs, then try again.`, action: 'Try loading again', run: retry, busy: device?.busy };
