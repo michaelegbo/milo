@@ -15,7 +15,7 @@ Milo is an expressive Three.js robot that speaks your sentences and has voice or
 3. Pick a preset or type a sentence, choose Michael, Heart or Emma, and let Milo speak. Use pause, resume, stop or download the generated WAV.
 4. Open **Conversation** and type a message. Microphone permission is requested only when you choose to listen or enable microphone selection.
 5. Select Fast, Better answers or Hybrid. Prepare the corresponding model when prompted.
-6. If the browser detects a compatible GPU, enable acceleration for replies. Turn it off to reload the selected model on the device CPU. Unload the engines to release their live contexts.
+6. If the browser detects a compatible GPU, replies use it automatically and the switch shows **On**. Turn it off to reload the selected model on the device CPU; that choice is remembered in this browser. Unload the engines to release their live contexts.
 
 Initial preparation can take minutes and conversation downloads are large. Start with voice or Fast on a laptop; CPU replies can take tens of seconds. This is an experimental local AI companion, with no browsing or external tools.
 
@@ -75,7 +75,7 @@ Speech and transcription use the device CPU through WebAssembly in every mode. T
 
 ## GPU acceleration and compatibility
 
-Milo detects browser WebGPU capabilities, requests acceleration only when enabled and reports GPU use only after the loader confirms model layers were offloaded. A browser with an unavailable or unsupported adapter stays on CPU. GPU errors surface a message and recover on the local CPU where possible; there is no cloud inference fallback.
+Milo detects browser WebGPU capabilities when conversation starts, prepares the reply model on a compatible adapter automatically unless you turned acceleration off earlier, and reports GPU use only after the loader confirms model layers were offloaded. A browser with an unavailable or unsupported adapter stays on CPU. If the GPU load fails, Milo prepares the same model on the CPU and explains what happened; there is no cloud inference fallback.
 
 The GPU label uses the identity exposed by WebGPU. Some browsers reveal only a vendor (for example, “NVIDIA GPU”) and hide the exact model for privacy. Milo explains that limitation; a missing card model does not mean acceleration failed. “GPU active” requires confirmed model offloading, independently of the displayed name.
 

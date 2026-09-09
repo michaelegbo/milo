@@ -8,6 +8,14 @@ type Reply = { text: string; profile: ChatProfile; mode: ChatMode; device: 'cpu'
 type Options = { profile?: ChatMode; targetProfile?: ChatProfile; memory?: ConversationMemory; signal?: AbortSignal; onRouting?: (route: ChatRoute) => void; onTextChunk?: (text: string) => void };
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void; cleanup: () => void; generating: () => void; options: Options };
 type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'webgpu' | null; deviceName: string | null; deviceInfo?: string | null; revision: number; message: string };
+// The explicit switch is remembered per browser; nothing else about the device is stored.
+const GPU_PREFERENCE_KEY = 'milo-gpu-v1';
+function readGpuPreference(): 'on' | 'off' | null {
+  try { const value = localStorage.getItem(GPU_PREFERENCE_KEY); return value === 'on' || value === 'off' ? value : null; } catch { return null; }
+}
+function saveGpuPreference(value: 'on' | 'off') {
+  try { localStorage.setItem(GPU_PREFERENCE_KEY, value); } catch { /* Session still works without storage. */ }
+}
 type EngineHealth = { status: string; progress: number; message: string; profile: ChatMode; selectedModel: ChatProfile | null; model: string; device: 'cpu' | 'gpu' | null; gpuLayers?: number; cpuThreads?: number; queueDepth: number; residency: 'single'; residencyReason: string; acceleration: Acceleration };
 
 class DeviceChatClient {
@@ -101,23 +109,47 @@ class DeviceChatClient {
       const gpu = (navigator as unknown as { gpu?: { requestAdapter(options: { powerPreference: string; forceFallbackAdapter: boolean }): Promise<Adapter | null> } }).gpu;
       let details = describeGpuAdapter(null);
       try {
-        const adapter = await gpu?.requestAdapter({ powerPreference: 'high-performance', forceFallbackAdapter: false });
+        // A stalled driver must not hold up CPU preparation.
+        const adapter = await Promise.race([
+          gpu?.requestAdapter({ powerPreference: 'high-performance', forceFallbackAdapter: false }) ?? Promise.resolve(null),
+          new Promise<null>(resolve => setTimeout(() => resolve(null), 8000)),
+        ]);
         details = describeGpuAdapter(adapter);
       } catch { /* CPU remains usable when browser GPU permission/driver fails. */ }
       const { available } = details;
       this.state.acceleration = { ...this.state.acceleration, ...details, backend: available ? 'webgpu' : null,
         status: this.state.acceleration.status === 'switching' ? 'switching' : available ? 'ready' : 'unavailable',
-        message: available ? 'Compatible browser GPU detected. Turn on to accelerate replies on this device.' : 'A compatible browser GPU is unavailable. Replies run on this device’s CPU.' };
+        message: available ? 'Compatible browser GPU detected. Replies use it automatically; turn off to use the CPU.' : 'A compatible browser GPU is unavailable. Replies run on this device’s CPU.' };
     })();
     return this.detection;
   }
 
-  initialize(options: { profile: ChatMode; signal?: AbortSignal }) { void this.detectGpu(); return this.request<void>('initialize', undefined, options); }
+  /** Prepare the selected model, using a compatible GPU by default and the CPU when that fails or was turned off. */
+  async initialize(options: { profile: ChatMode; signal?: AbortSignal }) {
+    await this.detectGpu();
+    options.signal?.throwIfAborted();
+    const useGpu = this.state.acceleration.available && readGpuPreference() !== 'off';
+    this.wantGpu = useGpu;
+    if (useGpu) this.state.acceleration = { ...this.state.acceleration, status: 'switching', message: 'Preparing the model on this device’s GPU…' };
+    try {
+      await this.request<void>('initialize', undefined, options);
+    } catch (error) {
+      if (!useGpu || options.signal?.aborted || (error as Error).name === 'AbortError') throw error;
+      this.wantGpu = false;
+      this.reset();
+      this.state.acceleration = { ...this.state.acceleration, status: 'switching', message: 'GPU could not start. Preparing this device’s CPU…' };
+      await this.request<void>('initialize', undefined, options);
+      this.state.acceleration = { ...this.state.acceleration, enabled: false, status: 'error', message: `GPU could not start. CPU is ready. ${(error as Error).message}` };
+      return;
+    }
+    if (useGpu) this.state.acceleration = { ...this.state.acceleration, status: 'ready', enabled: this.state.device === 'gpu', message: 'Replies use this device’s GPU. Voice and listening stay on CPU.' };
+  }
   reply(messages: ChatMessage[], options: Options = {}) { return this.request<Reply>('reply', messages, options); }
   summarize(messages: ChatMessage[], options: Options = {}) { return this.request<{ summary: string }>('summary', messages, options); }
   async setAcceleration(enabled: boolean, options: { signal?: AbortSignal } = {}) {
     if (typeof enabled !== 'boolean') throw new Error('GPU acceleration must be on or off.');
     options.signal?.throwIfAborted();
+    saveGpuPreference(enabled ? 'on' : 'off');
     const revision = ++this.gpuRevision;
     const profile = this.state.profile;
     const targetProfile = this.state.selectedModel ?? (profile === 'quality' ? 'quality' : 'fast');

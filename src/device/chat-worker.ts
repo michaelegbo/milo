@@ -44,7 +44,7 @@ async function prepare(profile: ChatProfile, request: Request) {
     await instance.loadModel(await model.open(), {
       n_gpu_layers: gpu ? 99999 : 0, n_ctx: 4096, n_parallel: 1, kv_unified: true,
       n_threads: Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))),
-      n_batch: 128, n_ubatch: 64, warmup: false, log_level: gpu ? LogLevel.INFO : LogLevel.ERROR,
+      n_batch: 256, n_ubatch: 128, warmup: false, log_level: gpu ? LogLevel.INFO : LogLevel.ERROR,
       reasoning: false, reasoning_budget_tokens: 0, default_template_kwargs: { enable_thinking: false },
     });
   };
@@ -78,7 +78,10 @@ async function generate(request: Request) {
   post({ type: 'generating', id: request.id });
   try { await runtime!.createChatCompletion({
     messages, stream: true, temperature: 0, max_tokens: summary ? 240 : definition.maxTokens,
-    penalty_repeat: 1.05, penalty_last_n: 64, cache_prompt: false,
+    // Reuse the KV cache for the unchanged prompt prefix (system prompt, memory,
+    // earlier turns) so the first word does not wait for the whole history to be
+    // re-evaluated. Matching is token-exact, so changed memory never reuses stale state.
+    penalty_repeat: 1.05, penalty_last_n: 64, cache_prompt: true,
     chat_template_kwargs: { enable_thinking: false },
     abortSignal: responseController.signal,
     onData(chunk) {

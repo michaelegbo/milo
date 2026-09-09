@@ -17,7 +17,7 @@ let deleting = false;
 let unloadOperation: Promise<void> | undefined;
 const approvedProfiles = new Set<DeviceProfile>();
 const unloaded = { status: 'unloaded', progress: 0, device: 'cpu', message: 'Choose Download & start to enable this model.' };
-const acceleration = { available: false, enabled: false, status: 'unavailable', backend: null, deviceName: null, revision: 0, message: 'Start conversation to check this browser’s GPU. CPU is the default; no server fallback is used.' };
+const acceleration = { available: false, enabled: false, status: 'unavailable', backend: null, deviceName: null, revision: 0, message: 'Start conversation to check this browser’s GPU. A compatible GPU is used automatically; otherwise replies stay on CPU. No server fallback is used.' };
 
 export function setDeviceProfile(profile: DeviceProfile) {
   selectedProfile = profile;

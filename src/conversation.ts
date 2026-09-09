@@ -114,7 +114,7 @@ export function createConversation(options: {
     const gpuDetails = el('gpu-details');
     gpuDetails.textContent = acceleration?.deviceInfo || '';
     gpuDetails.hidden = !acceleration?.deviceInfo;
-    el('gpu-status').textContent = gpuError || (switchingGpu ? gpuEnabled ? 'Switching to GPU…' : 'Returning to CPU…' : !acceleration || acceleration.status === 'detecting' ? 'Checking for a GPU…' : gpuEnabled ? health?.chat.status === 'ready' ? readyDeviceLabel : 'Preparing GPU replies…' : acceleration.status === 'unavailable' || acceleration.status === 'error' ? acceleration.message || 'GPU unavailable. CPU replies are available.' : acceleration.message || 'CPU active · GPU is optional');
+    el('gpu-status').textContent = gpuError || (switchingGpu ? gpuIntent === undefined ? acceleration?.message || 'Preparing replies on this device…' : gpuEnabled ? 'Switching to GPU…' : 'Returning to CPU…' : !acceleration || acceleration.status === 'detecting' ? 'Checking for a GPU…' : gpuEnabled ? health?.chat.status === 'ready' ? readyDeviceLabel : 'Preparing GPU replies…' : acceleration.status === 'unavailable' || acceleration.status === 'error' ? acceleration.message || 'GPU unavailable. CPU replies are available.' : acceleration.message || 'CPU active · GPU is optional');
     el('conversation-status').textContent = detail;
     container.dataset.state = state;
     container.dataset.micMuted = String(micMuted);
@@ -266,7 +266,7 @@ export function createConversation(options: {
     const assistant: Message = { role: 'assistant', content: '' };
     let paragraph: HTMLElement | undefined;
     async function* sentences() {
-      let spokenBuffer = '';
+      let spokenBuffer = '', spokenChunks = 0;
       const response = await apiFetch('/api/chat/stream', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: context, memory: memory(), profile }),
@@ -290,7 +290,14 @@ export function createConversation(options: {
             const sentence = spokenBuffer.slice(0, end).trim();
             if (/\b(?:Mr|Mrs|Ms|Dr|Prof|e\.g|i\.e)\.$/i.test(sentence)) continue;
             spokenBuffer = spokenBuffer.slice(end); punctuation.lastIndex = 0;
-            if (sentence) yield sentence;
+            if (sentence) { spokenChunks++; yield sentence; }
+          }
+          // Audio starts sooner when an opening clause of at least six words is
+          // voiced while the rest of the first sentence is still being generated.
+          // The clause must be followed by whitespace so numbers like 1,000 stay whole.
+          if (!spokenChunks) {
+            const clause = /^((?:\S+\s+){5,}\S+[,;:])\s+/.exec(spokenBuffer);
+            if (clause) { spokenBuffer = spokenBuffer.slice(clause[0].length); spokenChunks++; yield clause[1]; }
           }
         } else if (event.type === 'done') {
           if (!assistant.content.trim()) throw new Error('Milo did not produce a reply. Please try again.');

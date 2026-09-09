@@ -25,7 +25,10 @@ env.useBrowserCache = true;
 env.useFS = false;
 env.useFSCache = false;
 env.backends.onnx.wasm!.wasmPaths = new URL('/runtime/ort/', globalThis.location.origin).href;
-env.backends.onnx.wasm!.numThreads = 1;
+// Cross-origin isolation exposes SharedArrayBuffer, which lets ONNX Runtime run
+// Kokoro and Whisper across a few CPU threads. Each audio worker keeps to a small
+// share so the reply model and the page itself still have cores available.
+env.backends.onnx.wasm!.numThreads = typeof SharedArrayBuffer === 'undefined' ? 1 : Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2)));
 env.backends.onnx.wasm!.proxy = false;
 if (import.meta.env.VITE_AUDIO_MODEL_BASE) {
   env.remoteHost = new URL(import.meta.env.VITE_AUDIO_MODEL_BASE, globalThis.location.origin).href.replace(/\/?$/, '/');
