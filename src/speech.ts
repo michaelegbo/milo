@@ -38,6 +38,9 @@ export class SpeechPlayer {
   private samples?: Uint8Array<ArrayBuffer>;
   private spectrum?: Uint8Array<ArrayBuffer>;
   private source?: AudioBufferSourceNode;
+  private retiring?: AudioBufferSourceNode;
+  private handoff?: number;
+  private playsUntil = 0;
   private buffer?: AudioBuffer;
   private request?: AbortController;
   private generation = 0;
@@ -48,8 +51,8 @@ export class SpeechPlayer {
   onChange: () => void = () => {};
 
   get currentTime() {
-    return Math.min(this.duration, this.state === 'playing' && this.context
-      ? this.offset + this.context.currentTime - this.started : this.offset);
+    return Math.max(0, Math.min(this.duration, this.state === 'playing' && this.context
+      ? this.offset + this.context.currentTime - this.started : this.offset));
   }
 
   get hasAudio() { return !!this.buffer && this.duration > 0; }
@@ -187,7 +190,8 @@ export class SpeechPlayer {
     }
   }
 
-  private play() {
+  /** Start a source for the current buffer at this.offset, now or at a scheduled context time. */
+  private play(when?: number) {
     if (!this.buffer || !this.context || !this.analyser) return;
     const source = this.context.createBufferSource();
     source.buffer = this.buffer;
@@ -196,17 +200,57 @@ export class SpeechPlayer {
     source.onended = () => {
       source.disconnect();
       if (this.source !== source) return;
-      this.source = undefined;
+      this.source = undefined; this.clearHandoff();
       this.offset = playsUntil;
       if (this.duration > this.offset + 0.001) { this.play(); return; }
       this.state = this.streamOpen ? 'generating' : 'idle';
       this.onChange();
     };
     this.source = source;
-    this.started = this.context.currentTime;
+    this.playsUntil = playsUntil;
+    this.started = when ?? this.context.currentTime;
     this.state = 'playing';
-    source.start(0, this.offset);
+    source.start(when ?? 0, this.offset);
+    this.scheduleHandoff();
     this.onChange();
+  }
+
+  /**
+   * Streamed audio arrives while a source is already playing a snapshot of the
+   * buffer. Restarting when that snapshot ends leaves a gap at every chunk, which
+   * sounds like a dragging buzz. Instead, shortly before the end, a successor
+   * holding the newly appended audio is scheduled to begin at the exact sample
+   * where this one stops, so chunks join without a click.
+   */
+  private scheduleHandoff() {
+    this.clearHandoff();
+    if (!this.context || !this.source) return;
+    const endsAt = this.started + (this.playsUntil - this.offset);
+    const wait = Math.max(0, (endsAt - this.context.currentTime) * 1000 - 80);
+    this.handoff = window.setTimeout(() => {
+      this.handoff = undefined;
+      const current = this.source;
+      if (!current || !this.context || this.state !== 'playing' || !this.buffer) return;
+      const boundary = this.started + (this.playsUntil - this.offset);
+      // Too late (the source already ended and restarted) or nothing new: leave it to onended.
+      if (boundary <= this.context.currentTime || this.buffer.duration <= this.playsUntil + 0.001) return;
+      current.onended = () => { current.disconnect(); if (this.retiring === current) this.retiring = undefined; };
+      this.retiring?.stop(); this.retiring?.disconnect();
+      this.retiring = current;
+      this.offset = this.playsUntil;
+      this.play(boundary);
+    }, wait);
+  }
+
+  private clearHandoff() {
+    if (this.handoff !== undefined) { clearTimeout(this.handoff); this.handoff = undefined; }
+  }
+
+  private silence() {
+    this.clearHandoff();
+    const source = this.source, retiring = this.retiring;
+    this.source = undefined; this.retiring = undefined;
+    for (const node of [source, retiring]) { try { node?.stop(); } catch { /* Never started or already stopped. */ } node?.disconnect(); }
   }
 
   /** Play completed sentences while the rest of the response is still arriving. */
@@ -264,8 +308,7 @@ export class SpeechPlayer {
       }
     } catch (error) {
       if (id !== this.generation) return;
-      const source = this.source; this.source = undefined;
-      source?.stop(); source?.disconnect();
+      this.silence();
       this.streamOpen = false;
       this.state = 'error';
       this.error = request.signal.aborted ? 'That took too long. Try a shorter sentence or try again.' : error instanceof Error ? error.message : 'Milo could not finish speaking.';
@@ -279,10 +322,7 @@ export class SpeechPlayer {
   pause() {
     if (this.state !== 'playing') return;
     this.offset = this.currentTime;
-    const source = this.source;
-    this.source = undefined;
-    source?.stop();
-    source?.disconnect();
+    this.silence();
     this.state = 'paused';
     this.onChange();
   }
@@ -303,9 +343,7 @@ export class SpeechPlayer {
     this.streamOpen = false;
     this.request?.abort();
     this.request = undefined;
-    const source = this.source;
-    this.source = undefined;
-    source?.stop(); source?.disconnect();
+    this.silence();
     this.offset = 0;
     this.state = 'idle';
     this.error = '';
