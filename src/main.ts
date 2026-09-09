@@ -178,7 +178,7 @@ conversation = createConversation({
   setVoice: voice => { settings.voice = voice; save(); el<HTMLSelectElement>('voice').value = voice; },
   onSpeech: text => { activeText = text; deliveryMood = inferUtteranceMood(text); activeTitle = 'A conversation with Milo'; renderPlayback(); },
   onStateChange: renderPlayback,
-  device: devicePanel && { start: () => devicePanel.start(), describe: () => devicePanel.describe() },
+  device: devicePanel && { start: () => devicePanel.start(), stop: () => devicePanel.stop(), describe: () => devicePanel.describe() },
 });
 function setStudioMode(value: boolean) {
   devicePanel?.setConversation(value);

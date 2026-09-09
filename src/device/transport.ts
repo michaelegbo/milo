@@ -8,7 +8,7 @@ type AudioClient = (typeof import('./audio-client'))['deviceAudio'];
 type ChatClient = (typeof import('./chat-client'))['deviceChat'];
 let audio: AudioClient | undefined;
 let chat: ChatClient | undefined;
-let selectedProfile: DeviceProfile = 'fast';
+let selectedProfile: DeviceProfile = 'quality';
 let voiceConsent = false, conversationConsent = false;
 let initializingProfile: DeviceProfile | undefined;
 let releaseStorage: (() => Promise<void>) | undefined;

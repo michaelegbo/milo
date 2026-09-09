@@ -27,7 +27,7 @@ class DeviceChatClient {
   private pending = new Map<number, Pending>();
   private state: EngineHealth = {
     status: 'unloaded', progress: 0, message: 'Download a model to start private conversation on this device.',
-    profile: 'fast', selectedModel: null, model: 'Qwen', device: 'cpu', queueDepth: 0,
+    profile: 'quality', selectedModel: null, model: 'Qwen', device: 'cpu', queueDepth: 0,
     residency: 'single', residencyReason: 'One model stays in memory. Hybrid loads the other model from browser storage when needed.',
     acceleration: { available: false, enabled: false, status: 'detecting', backend: null, deviceName: null, revision: 0, message: 'Browser GPU support is checked when you start conversation.' },
   };

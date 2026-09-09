@@ -2,7 +2,7 @@ import { isDeviceOnly } from './deployment';
 import { codexHealth, codexReply, usesCodex } from './reply-provider';
 import { checkHostedVoice, hostedSpeak, hostedVoiceStatus, usesHostedVoice } from './voice-provider';
 
-let codexProfile = 'fast';
+let codexProfile = 'quality';
 /** Local inference is the default. Only an explicitly selected provider can send text. */
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   if (usesCodex() && ['/api/chat/stream', '/api/chat/summary'].includes(path)) return codexReply(path, init);

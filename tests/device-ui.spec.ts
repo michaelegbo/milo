@@ -266,12 +266,12 @@ test('each conversation profile requires consent, retains memory and streams Hyb
   await enableConversation(page);
   await expect(page.getByRole('switch', { name: 'GPU acceleration' })).toBeHidden();
   await send(page, 'My name is Amara.');
+  // Better answers is the default; choosing another model prepares it without a further click.
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:quality']);
   await page.getByLabel('MILO’S MIND').selectOption('hybrid');
-  await expect(page.locator('#conversation-start')).toBeDisabled();
   await expect(page.locator('#device-download-size')).toContainText('up to 3.8 GB');
-  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:fast']);
-  await page.getByRole('button', { name: /Download & start conversation/ }).click();
   await expect(page.locator('#conversation-start')).toBeEnabled();
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toContain('chat:hybrid');
   await send(page, 'Explain why leaves are green.');
   await expect(page.locator('#route-label')).toHaveText('Considered reply');
   const turns = await page.evaluate(() => (window as any).__device.turns);
@@ -447,8 +447,7 @@ test('browser GPU can return to CPU while warming or answering without losing Hy
   const { requests, errors } = await setup(page);
   await page.evaluate(() => { (window as any).__device.gpuAvailable = true; });
   await page.getByRole('tab', { name: 'Conversation' }).click();
-  await page.getByLabel('MILO’S MIND').selectOption('hybrid');
-  await page.getByRole('button', { name: /Download & start conversation/ }).click();
+  await page.getByLabel('MILO’S MIND').selectOption('hybrid'); // prepares on its own
   await expect(page.locator('#conversation-start')).toBeEnabled();
   await send(page, 'My name is Amara.');
   const gpu = page.getByRole('switch', { name: 'GPU acceleration' });

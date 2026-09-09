@@ -22,7 +22,7 @@ export function createConversation(options: {
   onSpeech: (text: string) => void;
   onStateChange: () => void;
   /** Browser edition only: the setup panel's consent action and what it would do. */
-  device?: { start(): void; describe(): { supported: boolean; capability: string; saved: 'all' | 'some' | 'none' | 'unknown'; busy: boolean; size: string } };
+  device?: { start(): void; stop(): void; describe(): { supported: boolean; capability: string; saved: 'all' | 'some' | 'none' | 'unknown'; busy: boolean; preparing: boolean; size: string } };
 }) {
   const { container, player } = options;
   container.innerHTML = `
@@ -43,7 +43,8 @@ export function createConversation(options: {
     <label class="conversation-interruption"><input id="conversation-interrupt" type="checkbox" checked> Interrupt Milo by speaking <span>During voice conversations · headphones work best</span></label>
     <form id="conversation-form" class="conversation-composer"><label class="sr-only" for="conversation-input">Message Milo</label><input id="conversation-input" type="text" maxlength="1000" placeholder="Or type something to Milo…" autocomplete="off"><button id="conversation-send" type="submit" aria-label="Send message" disabled>Send ↗</button></form>
     <details class="conversation-memory"><summary>What Milo remembers <span id="memory-count">This chat only</span></summary><p id="memory-detail">Explicit details and a short conversation summary will appear here. New chat clears everything.</p></details>
-    <p class="conversation-note">English voice · Local inference · Whisper + Qwen + Kokoro</p>`;
+    <p class="conversation-note">English voice · Local inference · Whisper + Qwen + Kokoro</p>
+    <dialog id="conversation-loading" class="conversation-loading" aria-labelledby="conversation-loading-title" aria-describedby="conversation-loading-text"><span class="eyebrow">GETTING READY</span><h2 id="conversation-loading-title">Loading your saved models…</h2><p id="conversation-loading-text"></p><progress id="conversation-loading-bar" max="100" aria-label="Model loading progress"></progress><div class="conversation-loading-actions"><span id="conversation-loading-note">Saved files load from this browser; nothing downloads.</span><button id="conversation-loading-cancel" class="text-button" type="button">Cancel</button></div></dialog>`;
   const el = <T extends HTMLElement = HTMLElement>(id: string) => container.querySelector<T>(`#${id}`)!;
   const checked = (id: string) => el<HTMLInputElement>(id).checked;
   const recorder = new MicrophoneRecorder();
@@ -54,7 +55,7 @@ export function createConversation(options: {
   let state: State = 'idle', detail = 'Start talking, or send a little note below.';
   let visible = false, version = 0, ownsPlayback = false, loop = false, receivedReply = false;
   let health: Health | undefined, healthError = '', checking = false, preparing = false, profilePending = false;
-  let profile: ChatMode = 'fast';
+  let profile: ChatMode = 'quality';
   let gpuIntent: boolean | undefined, gpuRevision: number | undefined, gpuEpoch = 0, gpuError = '';
   let gpuRequest: AbortController | undefined;
   let replyRoute: ReplyRoute | undefined;
@@ -138,6 +139,10 @@ export function createConversation(options: {
     options.onStateChange();
   }
   let nextAction: (() => void) | undefined;
+  // Saved models load on their own behind a modal; a cancel holds that off until the next visit.
+  let autoLoadDeclined = false, autoLoading = false;
+  // Choosing a model in the menu is itself the go-ahead: the chosen model prepares without another click.
+  let switchRequested = false;
   let codexLogin: (() => void) | undefined;
   const retry = () => { if (options.device) options.device.start(); else void prepare(); };
   /** Name the one thing standing between the visitor and a conversation, and offer it in place. */
@@ -148,6 +153,14 @@ export function createConversation(options: {
     const failed = engines.find(engine => engine.status === 'error');
     const unloaded = engines.some(engine => engine.status === 'unloaded');
     const loading = engines.some(engine => engine.status === 'loading') || health?.chat.acceleration?.status === 'switching' || gpuIntent !== undefined;
+    const preparing = !!device?.preparing;
+    const settled = !!health && health.chat.profile === profile;
+    if (device && !remote && visible && settled && !preparing && !loading && !failed && !healthError && device.supported && unloaded && !autoLoading && (switchRequested || (device.saved === 'all' && !autoLoadDeclined))) {
+      // Saved files load without a click. A first download still waits for consent unless the visitor just chose a model.
+      autoLoading = true; switchRequested = false; options.device!.start();
+    }
+    if (autoLoading && (!unloaded || failed || healthError)) autoLoading = false;
+    renderLoadingModal(preparing, engines.map((engine, i) => [names[i], engine] as const), failed);
     const progress = engines.map((engine, i) => `${names[i]} ${engine.status === 'ready' ? 'ready' : engine.status === 'loading' ? Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'preparing' : 'waiting'}`).join(' · ');
     let step: { text: string; action?: string; run?: () => void; busy?: boolean } | undefined;
     if (healthError) step = { text: healthError, action: 'Try loading again', run: retry, busy: device?.busy };
@@ -167,6 +180,7 @@ export function createConversation(options: {
             : usesHostedVoice() ? 'Milo needs its listening and reply models on this device. Your recordings and replies stay in this browser; only the text Milo says goes to Deepgram for its voice.' : 'Milo needs its voice, listening and reply models on this device. Nothing you say leaves this browser.';
       step = { text: `${text} ${device.size}.`, action: device.saved === 'all' ? 'Load saved models ↘' : device.saved === 'some' ? 'Download missing files & prepare ↘' : 'Download & prepare ↘', run: options.device!.start, busy: device.busy };
     }
+    if (preparing && visible) step = undefined; // The modal carries the progress while models prepare.
     nextAction = step?.run;
     el('conversation-next').hidden = !step;
     el('conversation-next-text').textContent = step?.text ?? '';
@@ -515,13 +529,30 @@ export function createConversation(options: {
     else if (player.state === 'playing' && ownsPlayback) { monitorSuppressed = false; void startMonitor(); }
   });
   el('conversation-model').addEventListener('change', () => {
-    stopWork(); profile = el<HTMLSelectElement>('conversation-model').value as ChatMode;
+    stopWork(); profile = el<HTMLSelectElement>('conversation-model').value as ChatMode; switchRequested = !!options.device && !usesCodex(); autoLoadDeclined = false;
     health = undefined; setState('idle', 'Preparing the selected mind…'); void prepare();
   });
   const onDeviceChange = () => { if (visible) void refreshDevices(); };
   navigator.mediaDevices?.addEventListener('devicechange', onDeviceChange);
   el('conversation-end').addEventListener('click', end);
   el('conversation-next-action').addEventListener('click', () => { nextAction?.(); render(); });
+  const loadingDialog = el<HTMLDialogElement>('conversation-loading');
+  function renderLoadingModal(preparing: boolean, engines: readonly (readonly [string, Engine])[], failed?: Engine) {
+    const open = preparing && visible && !failed;
+    if (open && !loadingDialog.open) { try { loadingDialog.showModal(); } catch { /* Already open elsewhere. */ } }
+    else if (!open && loadingDialog.open) loadingDialog.close();
+    if (!open) return;
+    const active = engines.find(([, engine]) => engine.status === 'loading');
+    const saved = options.device?.describe().saved === 'all';
+    el('conversation-loading-title').textContent = saved ? 'Loading your saved models…' : 'Preparing Milo on this device…';
+    el('conversation-loading-text').textContent = engines.map(([name, engine]) => `${name} ${engine.status === 'ready' ? 'ready' : engine.status === 'loading' ? Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'preparing' : 'waiting'}`).join(' · ');
+    el('conversation-loading-note').textContent = saved ? 'Saved files load from this browser; nothing downloads.' : 'Downloading once; later visits load from this browser.';
+    const bar = el<HTMLProgressElement>('conversation-loading-bar');
+    if (active && Number.isFinite(active[1].progress)) bar.value = active[1].progress as number; else bar.removeAttribute('value');
+  }
+  const cancelLoading = () => { autoLoadDeclined = true; autoLoading = false; options.device?.stop(); if (loadingDialog.open) loadingDialog.close(); render(); };
+  el('conversation-loading-cancel').addEventListener('click', cancelLoading);
+  loadingDialog.addEventListener('cancel', event => { event.preventDefault(); cancelLoading(); });
   el('new-conversation').addEventListener('click', () => {
     end(); messages.length = 0; facts.clear(); summary = ''; summarizedThrough = 0;
     el('conversation-log').replaceChildren(); renderMemory(); setState('idle', 'A fresh conversation. Say hello or type a message.');
@@ -535,12 +566,13 @@ export function createConversation(options: {
     stopWork(); input.value = ''; const token = version;
     void player.unlock().then(() => { if (token === version) return reply(text, token); }).catch(error => fail(error, token));
   });
+  el<HTMLSelectElement>('conversation-model').value = profile;
   el<HTMLSelectElement>('conversation-voice').value = options.getVoice().voice;
   el('conversation-voice').addEventListener('change', () => options.setVoice(el<HTMLSelectElement>('conversation-voice').value));
   const healthTimer = setInterval(() => void checkHealth(), 2000);
   const providerContainer = document.createElement('div'); providerContainer.className = 'reply-provider-panel';
   container.querySelector('.conversation-model')!.before(providerContainer);
-  const codexPanel = createCodexPanel(providerContainer, () => { stopWork(); gpuRequest?.abort(); gpuIntent = undefined; gpuEpoch++; health = undefined; setState('idle', 'Reply provider changed. Prepare the selected voice and connection to continue.'); });
+  const codexPanel = createCodexPanel(providerContainer, () => { switchRequested = false; stopWork(); gpuRequest?.abort(); gpuIntent = undefined; gpuEpoch++; health = undefined; setState('idle', 'Reply provider changed. Prepare the selected voice and connection to continue.'); });
   codexLogin = () => codexPanel.login();
   const onProviderChange = () => { gpuEpoch++; void checkHealth().then(() => { if (visible) void prepare(); }); };
   window.addEventListener('milo-provider-change', onProviderChange);
@@ -558,6 +590,6 @@ export function createConversation(options: {
       else { cancelMicAccess(); end(); }
     },
     cancel: end,
-    dispose() { disposed = true; visible = false; cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); window.removeEventListener('milo-voice-change', render); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+    dispose() { disposed = true; visible = false; if (loadingDialog.open) loadingDialog.close(); cancelMicAccess(); window.removeEventListener('pagehide', cancelMicAccess); stopWork(); gpuRequest?.abort(); codexPanel.dispose(); window.removeEventListener('milo-provider-change', onProviderChange); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); window.removeEventListener('milo-voice-change', render); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
   };
 }

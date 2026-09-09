@@ -115,11 +115,12 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
       if (!disposed) { void checkSaved(); render(); window.dispatchEvent(new Event('milo-device-change')); }
     });
   });
-  el('device-unload').addEventListener('click', () => {
+  function stopModels() {
     preparing?.abort(new DOMException('Stopped by you', 'AbortError')); preparing = undefined;
     onStop(); error = ''; notice = 'Models stopped. Your chat is still here. Start again to use cached downloads where available.';
     void unloadDevice().then(() => { if (!disposed) render(); });
-  });
+  }
+  el('device-unload').addEventListener('click', stopModels);
   el('device-delete').addEventListener('click', () => {
     if (deleting) return;
     el('device-delete-error').hidden = true;
@@ -169,8 +170,10 @@ export function createDevicePanel(container: HTMLElement, onStop: () => void) {
     /** The same consent action as the setup button, so other panels can offer it in place. */
     start() { const button = el<HTMLButtonElement>('device-start'); if (!button.disabled) button.click(); },
     describe() {
-      return { supported, capability: supported ? '' : capability, saved: describeSaved(), busy: !!preparing || deleting || (checking && !saved), size: el('device-download-size').textContent || '' };
+      return { supported, capability: supported ? '' : capability, saved: describeSaved(), busy: !!preparing || deleting || (checking && !saved), preparing: !!preparing, size: el('device-download-size').textContent || '' };
     },
+    /** Stop a download or load in progress and release the engines, as the setup panel's own button does. */
+    stop() { stopModels(); },
     dispose() { disposed = true; window.removeEventListener('focus', onFocus); preparing?.abort(); clearInterval(timer); window.removeEventListener('milo-device-change', render); window.removeEventListener('milo-voice-change', render); window.removeEventListener('milo-provider-change', onProvider); void unloadDevice(); },
   };
 }
