@@ -1,18 +1,18 @@
-// Hosted voice: a narrow same-origin proxy in front of Deepgram Aura text-to-speech.
+// Hosted voice: a narrow same-origin proxy in front of Deepgram Flux text-to-speech (/v2/speak).
 // The browser never sees the API key. Only the text Milo is about to say is sent
 // upstream; microphone audio, transcripts and chat history never pass through here.
 // Raw 24 kHz PCM is streamed back so playback can begin on the first bytes.
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 
-/** Milo voice ids map to Deepgram Aura voices; the same ids select Kokoro voices on the device. */
-export const HOSTED_VOICES = { am_michael: 'aura-2-apollo-en', af_heart: 'aura-2-thalia-en', bf_emma: 'aura-2-pandora-en' };
+/** Milo voice ids map to Deepgram Flux voices; the same ids select Kokoro voices on the device. */
+export const HOSTED_VOICES = { am_michael: 'flux-bruce-en', af_heart: 'flux-sienna-en', bf_emma: 'flux-gemma-en' };
 export const PCM_TYPE = 'audio/pcm;codec=s16le;rate=24000';
 const problem = (status, message) => Object.assign(new Error(message), { status });
 
 export function createHostedVoice({
   port = 8792, host = '127.0.0.1', apiKey = '', fetchImpl = globalThis.fetch, voices = HOSTED_VOICES,
-  upstream = 'https://api.deepgram.com/v1/speak', cacheBytes = 32 * 1024 * 1024, upstreamTimeoutMs = 30_000,
+  upstream = 'https://api.deepgram.com/v2/speak', cacheBytes = 32 * 1024 * 1024, upstreamTimeoutMs = 30_000,
   limit = { requests: 60, characters: 60_000, windowMs: 60_000 },
 } = {}) {
   // Finished clips are kept in memory so presets and repeated sentences cost nothing upstream.

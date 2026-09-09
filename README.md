@@ -1,6 +1,6 @@
 # Milo — a voice companion in 3D
 
-Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **Listening and replies run on your device by default.** Milo's spoken voice is synthesized by **Deepgram Aura** through Milo's own server, which holds the API key and streams audio back as it is made; when that service is unavailable, the on-device **Kokoro** voice takes over. Its cloud service otherwise delivers the website and downloadable model files. An optional **ChatGPT · My account** provider connects through Milo's hosted Codex app-server using OpenAI's device-code sign-in. Voice recordings and transcription remain on your device; only the text Milo is about to say is sent to Deepgram, and messages with conversation context pass through Milo to OpenAI only when you select that provider. Reply providers never switch automatically.
+Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **Listening and replies run on your device by default.** Milo's spoken voice is synthesized by **Deepgram Flux** through Milo's own server, which holds the API key and streams audio back as it is made; when that service is unavailable, the on-device **Kokoro** voice takes over. Its cloud service otherwise delivers the website and downloadable model files. An optional **ChatGPT · My account** provider connects through Milo's hosted Codex app-server using OpenAI's device-code sign-in. Voice recordings and transcription remain on your device; only the text Milo is about to say is sent to Deepgram, and messages with conversation context pass through Milo to OpenAI only when you select that provider. Reply providers never switch automatically.
 
 **Website:** [milo.seemplifyai.com](https://milo.seemplifyai.com) · **Source:** [michaelegbo/milo](https://github.com/michaelegbo/milo) · **License:** [PolyForm Noncommercial 1.0.0](LICENSE)
 
@@ -48,7 +48,7 @@ See the [ChatGPT sign-in, privacy, troubleshooting and developer guide](docs/cha
 
 | Engine | Purpose | Approximate model download |
 | --- | --- | ---: |
-| Deepgram Aura-2 (hosted) | Text-to-speech, three voices, streamed through Milo's proxy | none |
+| Deepgram Flux (hosted) | Text-to-speech, three voices (Bruce, Sienna, Gemma), streamed through Milo's proxy | none |
 | Kokoro 82M ONNX, q8 | On-device text-to-speech fallback, three included voices | 92 MB |
 | Whisper base.en ONNX, q8 | English speech-to-text | 80 MB |
 | Qwen2.5-1.5B-Instruct GGUF, Q4_K_M | Fast replies | 1.12 GB |
@@ -122,7 +122,7 @@ flowchart LR
     Router --> Qwen[Qwen worker: CPU or WebGPU]
     Qwen -->|Streamed reply| UI
     UI -->|Text Milo says| Voice[Hosted voice proxy: same origin]
-    Voice --> Deepgram[Deepgram Aura]
+    Voice --> Deepgram[Deepgram Flux]
     Deepgram -->|Streamed PCM| Audio[Web Audio playback]
     UI -.->|Fallback| Kokoro[Kokoro CPU worker]
     Kokoro --> Audio

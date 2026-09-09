@@ -44,7 +44,7 @@ test('speak streams raw PCM from Deepgram, sends only the text, and caches the c
   assert.equal(first.headers.get('x-milo-voice'), 'deepgram');
   assert.deepEqual(Buffer.from(await first.arrayBuffer()), pcm(9600));
   assert.equal(f.calls.length, 1);
-  assert.equal(f.calls[0].url.searchParams.get('model'), 'aura-2-apollo-en');
+  assert.equal(f.calls[0].url.searchParams.get('model'), 'flux-bruce-en');
   assert.equal(f.calls[0].url.searchParams.get('encoding'), 'linear16');
   assert.equal(f.calls[0].url.searchParams.get('container'), 'none');
   assert.equal(f.calls[0].init.headers.Authorization, 'Token test-key');
@@ -57,7 +57,7 @@ test('speak streams raw PCM from Deepgram, sends only the text, and caches the c
   const mp3 = await f.speak({ text: 'Hello there.' }, {}, '?format=mp3');
   assert.equal(mp3.headers.get('content-type'), 'audio/mpeg');
   assert.equal(f.calls[1].url.searchParams.get('encoding'), 'mp3');
-  assert.equal(f.calls[1].url.searchParams.get('model'), 'aura-2-thalia-en');
+  assert.equal(f.calls[1].url.searchParams.get('model'), 'flux-sienna-en');
 });
 
 test('invalid requests are rejected before anything reaches Deepgram', async t => {

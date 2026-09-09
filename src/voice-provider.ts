@@ -1,14 +1,14 @@
 import { isDeviceOnly } from './deployment';
 
 /**
- * The hosted voice is Deepgram Aura behind Milo's own origin. The browser
+ * The hosted voice is Deepgram Flux behind Milo's own origin. The browser
  * only ever talks to /api/voice/, so the API key stays on the server and the
  * content security policy is unchanged. When the proxy is missing, not
  * configured or failing, speech falls back to the on-device Kokoro voice.
  */
 export type HostedVoiceStatus = 'unknown' | 'ready' | 'unavailable';
 export const PCM_TYPE = 'audio/pcm';
-export const HOSTED_VOICE_LABELS: Record<string, string> = { am_michael: 'Apollo · American', af_heart: 'Thalia · American', bf_emma: 'Pandora · British' };
+export const HOSTED_VOICE_LABELS: Record<string, string> = { am_michael: 'Bruce · American', af_heart: 'Sienna · American', bf_emma: 'Gemma · British' };
 export const DEVICE_VOICE_LABELS: Record<string, string> = { am_michael: 'Michael · American', af_heart: 'Heart · American', bf_emma: 'Emma · British' };
 
 let status: HostedVoiceStatus = isDeviceOnly ? 'unknown' : 'unavailable';

@@ -34,7 +34,7 @@ export function deviceHealth() {
   const approved = approvedProfiles.has(selectedProfile);
   // The hosted voice needs no download: only the text Milo says leaves the device.
   const tts = usesHostedVoice()
-    ? { ...voices.tts, status: 'ready', progress: 100, device: 'hosted', backend: 'deepgram', model: 'deepgram/aura-2', downloadBytes: 0, busy: false, hosted: true, message: 'Milo speaks with the hosted Deepgram voice. The on-device voice is optional.' }
+    ? { ...voices.tts, status: 'ready', progress: 100, device: 'hosted', backend: 'deepgram', model: 'deepgram/flux', downloadBytes: 0, busy: false, hosted: true, message: 'Milo speaks with the hosted Deepgram voice. The on-device voice is optional.' }
     : voices.tts;
   return {
     tts, stt: voices.stt,

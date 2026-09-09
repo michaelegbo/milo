@@ -522,7 +522,7 @@ test('the hosted voice speaks without any download, streams PCM, and explains it
   await expect(page.locator('#local-label-text')).toContainText('Voice by Deepgram');
   await expect(page.locator('.device-privacy')).toContainText('Only the text Milo says is sent to Deepgram');
   await expect(page.locator('#device-download-size')).toContainText('No download needed');
-  await expect(page.getByRole('combobox', { name: 'VOICE', exact: true })).toContainText('Apollo · American');
+  await expect(page.getByRole('combobox', { name: 'VOICE', exact: true })).toContainText('Bruce · American');
   await expect(page.getByRole('slider', { name: 'Speech pace' })).toBeDisabled();
   await page.getByRole('tab', { name: 'Write your own' }).click();
   await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('Hello from the hosted voice.');

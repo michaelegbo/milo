@@ -25,7 +25,7 @@ Do not copy the private account volume into public build artifacts or model dire
 
 ## Hosted voice service
 
-Milo's spoken voice is Deepgram Aura, reached only through the `voice` service in
+Milo's spoken voice is Deepgram Flux (the `/v2/speak` endpoint), reached only through the `voice` service in
 `compose.dokploy.yml` (`deploy/Dockerfile.voice`, `server/voice-hosted.mjs`). Nginx
 proxies `/api/voice/` to it on the Compose network, so the browser talks to Milo's
 own origin and the content security policy stays `connect-src 'self'`.
