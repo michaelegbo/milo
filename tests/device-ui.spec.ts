@@ -213,6 +213,111 @@ test('unloading during a pending reply cancels stale text and audio while preser
   expectPrivate(requests); expect(errors).toEqual([]);
 });
 
+async function seedModelStorage(page: Page) {
+  await page.evaluate(async () => {
+    const { CacheManager } = await import('/node_modules/@wllama/wllama/esm/index.js' as string);
+    const manager = new CacheManager();
+    const urls = ['/models/chat/fast.gguf', ...Array.from({ length: 5 }, (_, i) => `/models/chat/quality-${String(i + 1).padStart(5, '0')}-of-00005.gguf`)];
+    const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('cache', { create: true });
+    for (const path of [...urls, '/unrelated.gguf']) {
+      const url = new URL(path, location.origin).href;
+      const key = await manager.getNameFromURL(url);
+      const file = await directory.getFileHandle(key, { create: true });
+      const writable = await file.createWritable(); await writable.write('test model bytes'); await writable.close();
+      // Leave the last Quality shard incomplete: no metadata.
+      if (!path.includes('00005-of')) await manager.writeMetadata(key, { originalURL: url, originalSize: 16, etag: 'test' });
+    }
+    const audio = await caches.open('transformers-cache');
+    for (const path of ['/models/onnx-community/Kokoro-82M-v1.0-ONNX/onnx/model_quantized.onnx', '/models/Xenova/whisper-base.en/config.json', '/keep-this.txt']) {
+      await audio.put(path, new Response('retained unless a Milo model', { headers: { 'Content-Length': '28' } }));
+    }
+    localStorage.setItem('milo-test-preference', 'keep');
+  });
+}
+
+test('deleting downloads confirms, clears actual model storage and preserves chat and unrelated files', async ({ page }, testInfo) => {
+  await setup(page);
+  await seedModelStorage(page);
+  await page.getByRole('tab', { name: 'Conversation' }).click();
+  await page.getByRole('button', { name: /Download & start conversation/ }).click();
+  await expect(page.locator('#conversation-start')).toBeEnabled();
+  await send(page, 'My name is Amara.');
+  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  await expect(page.locator('#device-delete-inventory')).toContainText('13 saved');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: testInfo.outputPath('delete-models-confirmation.png') });
+  await page.getByRole('button', { name: 'Keep downloads' }).click();
+  await expect(page.locator('#conversation-start')).toBeEnabled();
+  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete models', exact: true }).click();
+  await expect(page.locator('#device-delete-dialog')).not.toBeVisible();
+  await expect(page.locator('#device-status')).toContainText('Downloaded models deleted');
+  await expect(page.locator('.conversation-message.user')).toContainText('Amara');
+  await expect(page.locator('#conversation-start')).toBeDisabled();
+  const preserved = await page.evaluate(async () => {
+    const cache = await caches.open('transformers-cache');
+    const directory = await (await navigator.storage.getDirectory()).getDirectoryHandle('cache');
+    const names = []; for await (const name of (directory as any).keys()) names.push(name);
+    return { urls: (await cache.keys()).map(request => new URL(request.url).pathname), names, preference: localStorage.getItem('milo-test-preference') };
+  });
+  expect(preserved.urls).toEqual(['/keep-this.txt']);
+  expect(preserved.names).toHaveLength(2);
+  expect(preserved.names.every(name => name.endsWith('_unrelated.gguf'))).toBe(true);
+  expect(preserved.preference).toBe('keep');
+  await page.reload();
+  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  await expect(page.locator('#device-delete-inventory')).toContainText('No saved model files');
+});
+
+test('deletion stops an in-progress preparation and permits an explicit restart', async ({ page }) => {
+  await setup(page); await seedModelStorage(page);
+  await page.evaluate(() => { (window as any).__device.holdInitialize = true; });
+  await page.getByRole('button', { name: /Download & start voice/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__device.initialize.length)).toBe(1);
+  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete models', exact: true }).click();
+  await expect(page.locator('#device-status')).toContainText('Downloaded models deleted');
+  await page.evaluate(() => { const state = (window as any).__device; state.holdInitialize = false; state.releaseInitialize?.(); });
+  await expect(page.locator('#speak')).toBeDisabled();
+  await page.getByRole('button', { name: /Download & start voice/ }).click();
+  await expect(page.locator('#speak')).toBeEnabled();
+});
+
+test('another tab protects shared model storage until its engines are released', async ({ page, context }) => {
+  await setup(page); await seedModelStorage(page);
+  const other = await context.newPage();
+  await other.goto(process.env.MILO_DEVICE_TEST_URL!);
+  await other.evaluate(async () => {
+    const { holdModelStorage } = await import('/src/device/model-storage.ts' as string);
+    (window as any).releaseModels = await holdModelStorage(new AbortController().signal);
+  });
+  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete models', exact: true }).click();
+  await expect(page.locator('#device-delete-error')).toContainText('Another Milo tab');
+  expect(await page.evaluate(async () => (await (await caches.open('transformers-cache')).keys()).length)).toBe(3);
+  await other.evaluate(async () => { await (window as any).releaseModels(); });
+  await page.getByRole('button', { name: 'Delete models', exact: true }).click();
+  await expect(page.locator('#device-status')).toContainText('Downloaded models deleted');
+  await other.close();
+});
+
+test('partial deletion reports failure and can retry without claiming storage was cleared', async ({ page }) => {
+  await setup(page); await seedModelStorage(page);
+  await page.evaluate(() => {
+    const original = FileSystemDirectoryHandle.prototype.removeEntry;
+    (window as any).restoreDeletion = () => { FileSystemDirectoryHandle.prototype.removeEntry = original; };
+    FileSystemDirectoryHandle.prototype.removeEntry = async function () { throw new DOMException('Close other Milo tabs and retry.', 'NoModificationAllowedError'); };
+  });
+  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete models', exact: true }).click();
+  await expect(page.locator('#device-delete-error')).toContainText('Some files may already have been removed');
+  await expect(page.locator('#device-delete-dialog')).toBeVisible();
+  await expect(page.locator('#device-status')).toContainText('did not finish');
+  await page.evaluate(() => { (window as any).restoreDeletion(); });
+  await page.getByRole('button', { name: 'Delete models', exact: true }).click();
+  await expect(page.locator('#device-status')).toContainText('Downloaded models deleted');
+});
+
 test('browser GPU can return to CPU while warming or answering without losing Hybrid memory or using an API', async ({ page }, testInfo) => {
   const { requests, errors } = await setup(page);
   await page.evaluate(() => { (window as any).__device.gpuAvailable = true; });

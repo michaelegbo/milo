@@ -43,6 +43,8 @@ Voice alone needs Kokoro. Fast conversation adds Whisper and Qwen 1.5B, about **
 
 Models are cached in the browser's storage for this website. Browsers may evict that cache, particularly in private browsing or when storage is low. Changing browser, profile or device requires separate downloads. An unloaded engine can reuse its cached model. Clearing site data removes these caches and saved interface preferences.
 
+Use **Delete downloaded models** in the setup panel to remove Milo's saved voice, listening and reply model files after confirmation. This stops playback and loaded engines, clears the model entries in Cache Storage and the browser's private filesystem, and keeps the current chat and preferences. Close other Milo tabs first; active tabs using the updated app protect their shared files until they are closed or their engines are unloaded. You can cancel before deletion or retry a failed deletion. Starting again prepares the models anew. **Free up memory** only unloads engines and keeps downloads. Browser-managed temporary HTTP cache and ordinary website assets are separate; use the browser's clear-site-data controls for a full site cleanup.
+
 Kokoro is TTS only. Whisper supplies STT, and Qwen supplies the replies. The same quantized GGUF weights are used for CPU and GPU; Hybrid adds no third language model.
 
 ## Fast, Better answers and Hybrid

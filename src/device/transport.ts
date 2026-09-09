@@ -1,4 +1,5 @@
 import type { ChatMessage, ConversationMemory } from '../conversation-memory';
+import { clearStoredModels, holdModelStorage } from './model-storage';
 
 export type DeviceProfile = 'fast' | 'quality' | 'hybrid';
 type AudioClient = (typeof import('./audio-client'))['deviceAudio'];
@@ -8,6 +9,11 @@ let chat: ChatClient | undefined;
 let selectedProfile: DeviceProfile = 'fast';
 let voiceConsent = false, conversationConsent = false;
 let initializingProfile: DeviceProfile | undefined;
+let releaseStorage: (() => Promise<void>) | undefined;
+let storageRequest: Promise<void> | undefined;
+let storageController = new AbortController();
+let deleting = false;
+let unloadOperation: Promise<void> | undefined;
 const approvedProfiles = new Set<DeviceProfile>();
 const unloaded = { status: 'unloaded', progress: 0, device: 'cpu', message: 'Choose Download & start to enable this model.' };
 const acceleration = { available: false, enabled: false, status: 'unavailable', backend: null, deviceName: null, revision: 0, message: 'Start conversation to check this browser’s GPU. CPU is the default; no server fallback is used.' };
@@ -31,11 +37,21 @@ export function deviceHealth() {
 
 /** Downloads begin only after the separate, clearly labelled setup action. */
 export async function initializeDevice(conversation: boolean, signal: AbortSignal) {
+  await unloadOperation;
+  if (deleting) throw new Error('Wait for model deletion to finish before starting Milo.');
   const profile = selectedProfile;
   if (!globalThis.isSecureContext || !globalThis.crossOriginIsolated || typeof WebAssembly === 'undefined' || typeof Worker === 'undefined') {
     throw new Error('This browser cannot start local AI here. Use a current desktop browser with a secure connection and cross-origin isolation. Your words will not be sent to a server.');
   }
   signal.throwIfAborted();
+  const sessionSignal = AbortSignal.any([signal, storageController.signal]);
+  storageRequest ??= holdModelStorage(sessionSignal).then(async release => {
+    if (sessionSignal.aborted) { await release(); sessionSignal.throwIfAborted(); }
+    releaseStorage = release;
+  }).catch(error => { storageRequest = undefined; throw error; });
+  await storageRequest;
+  sessionSignal.throwIfAborted();
+  signal = sessionSignal;
   if (conversation) initializingProfile = profile;
   window.dispatchEvent(new Event('milo-device-change'));
   try {
@@ -58,11 +74,24 @@ export async function initializeDevice(conversation: boolean, signal: AbortSigna
   }
 }
 
-export async function unloadDevice() {
+export function unloadDevice() {
+  return unloadOperation ??= (async () => {
+  const pending = storageRequest;
+  storageController.abort(); storageController = new AbortController();
   voiceConsent = false; conversationConsent = false; approvedProfiles.clear();
   initializingProfile = undefined;
   await Promise.allSettled([audio?.dispose(), chat?.dispose()]);
+  await pending?.catch(() => {});
+  await releaseStorage?.(); releaseStorage = undefined; storageRequest = undefined;
   window.dispatchEvent(new Event('milo-device-change'));
+  })().finally(() => { unloadOperation = undefined; });
+}
+
+export async function deleteDeviceModels() {
+  if (deleting) throw new Error('Model deletion is already running.');
+  deleting = true;
+  try { await unloadDevice(); return await clearStoredModels(); }
+  finally { deleting = false; window.dispatchEvent(new Event('milo-device-change')); }
 }
 
 const json = (value: unknown, status = 200) => Response.json(value, { status });
