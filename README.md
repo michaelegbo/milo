@@ -10,7 +10,7 @@ Milo is an expressive Three.js robot that speaks your sentences and has voice or
 
 ## Try Milo
 
-1. Open the website in a recent desktop browser. The avatar appears before any model download.
+1. Open the website in a recent desktop browser. The avatar appears before any model download. On a phone the page is an app shell: the stage stays at the top, one screen shows at a time, and a Studio · Talk · Setup bar at the bottom switches between the sentence studio, the conversation, and downloads and settings.
 2. The sentence studio works immediately with the hosted voice, so nothing downloads for it. For conversation, choose the download option for listening and replies; Milo explains the size before starting. **Download voice** remains available for the on-device fallback voice.
 3. Pick a preset or type a sentence, choose Michael, Heart or Emma, and let Milo speak. The three presets are pre-rendered Kokoro clips that play instantly at normal pace; custom text and other paces are generated on your device sentence by sentence, so speech starts before the whole text is finished. Use pause, resume, stop or download the generated WAV.
 4. Open **Conversation** and type a message. If Milo is not ready, the panel names the one thing needed next, such as loading saved models, downloading missing files, signing in to ChatGPT or retrying after an error, and offers that action in place. Microphone permission is requested only when you choose to listen or enable microphone selection.

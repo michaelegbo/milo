@@ -152,8 +152,13 @@ test('GPU on and off retain Hybrid mode, conversation history and explicit memor
   await page.screenshot({ path: testInfo.outputPath('gpu-desktop-ready.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  for (const id of ['gpu-toggle', 'gpu-status', 'gpu-device', 'conversation-model', 'conversation-input']) await expect(page.locator(`#${id}`)).toBeVisible();
+  // On a phone the settings live on the Setup screen and the composer on Talk.
+  await page.getByRole('tab', { name: 'Setup', exact: true }).click();
+  for (const id of ['gpu-toggle', 'gpu-status', 'gpu-device', 'conversation-model']) await expect(page.locator(`#${id}`)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('gpu-mobile-ready.png'), fullPage: true });
+  await page.getByRole('tab', { name: 'Talk', exact: true }).click();
+  await expect(page.locator('#conversation-input')).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await toggle.click();
   await expect.poll(() => switches).toEqual([true, false]);
   completeSwitch('cpu');

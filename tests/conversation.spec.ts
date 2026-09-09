@@ -44,6 +44,7 @@ test('typed conversation remembers context, speaks real audio, stays private to 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('conversation-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await page.getByRole('button', { name: 'New chat' }).click();
   await expect(page.locator('.conversation-message')).toHaveCount(0);
   await page.reload();

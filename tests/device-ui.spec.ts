@@ -185,6 +185,7 @@ test('ChatGPT is opt-in, selects account models, prepares local audio and preser
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('chatgpt-mobile.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await page.getByRole('button', { name: 'Disconnect ChatGPT', exact: true }).click();
   await expect(page.getByLabel('REPLY PROVIDER')).toHaveValue('device');
   expect(hosted.signedIn).toBe(false);
@@ -211,7 +212,9 @@ test('ChatGPT device sign-in supports new codes, cancellation, failures and priv
   await page.screenshot({ path: testInfo.outputPath('chatgpt-sign-in-desktop.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('tab', { name: 'Setup', exact: true }).click();
   await page.locator('#codex-controls').screenshot({ path: testInfo.outputPath('chatgpt-sign-in-mobile.png') });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await page.getByRole('button', { name: 'Get a new code' }).click();
   await expect(page.locator('#codex-device-code')).toHaveText('MILO-CODE3');
   await page.getByRole('button', { name: 'Cancel sign-in' }).click();
@@ -248,7 +251,9 @@ test('device landing requests no models or API before consent and plays local sp
   await page.screenshot({ path: testInfo.outputPath('device-desktop-consent.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole('tab', { name: 'Setup', exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath('device-mobile-consent.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await page.getByRole('button', { name: /Download & start voice/ }).click();
   await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:tts']);
@@ -281,6 +286,7 @@ test('each conversation profile requires consent, retains memory and streams Hyb
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('device-mobile-conversation.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await page.getByRole('button', { name: 'Free up memory' }).click();
   await expect(page.locator('#conversation-start')).toBeDisabled();
   await expect(page.locator('.conversation-message.user').first()).toContainText('Amara');
@@ -372,6 +378,7 @@ test('deleting downloads confirms, clears actual model storage and preserves cha
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: testInfo.outputPath('delete-models-confirmation.png') });
   await page.getByRole('button', { name: 'Keep downloads' }).click();
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await expect(page.locator('#conversation-start')).toBeEnabled();
   await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
   await page.getByRole('button', { name: 'Delete models', exact: true }).click();
@@ -470,6 +477,7 @@ test('browser GPU can return to CPU while warming or answering without losing Hy
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('device-mobile-gpu.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   const previousSpeech = await page.evaluate(() => (window as any).__device.speech.length);
   await page.evaluate(() => { const state = (window as any).__device; state.holdReply = true; state.replyText = 'This GPU reply was cancelled.'; });
   await page.getByRole('textbox', { name: 'Message Milo' }).fill('Explain why leaves are green.');
@@ -503,6 +511,9 @@ test('the real unloaded device page displays consent before any model request at
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('milo-device-mobile-real.png'), fullPage: true });
+  await page.getByRole('tab', { name: 'Talk', exact: true }).click();
+  await expect(page.locator('#conversation-start')).toBeDisabled();
+  await page.setViewportSize({ width: 1440, height: 1024 });
   await page.getByRole('tab', { name: 'Conversation' }).click();
   await expect(page.locator('#conversation-start')).toBeDisabled();
   await expect(page.locator('#conversation-engines')).toContainText('not loaded');
@@ -548,7 +559,6 @@ test('an iPhone starts on ChatGPT with a connect dialog, and on-device replies o
   });
   const { requests, errors } = await setup(page);
   const hosted = await mockHostedChatGPT(page, false);
-  await page.setViewportSize({ width: 390, height: 844 });
   await page.getByRole('tab', { name: 'Conversation' }).click();
   // A phone starts on ChatGPT and is asked to connect in a dialog; no local model is offered first.
   await expect(page.getByLabel('REPLY PROVIDER')).toHaveValue('codex');
@@ -579,7 +589,10 @@ test('an iPhone starts on ChatGPT with a connect dialog, and on-device replies o
   // Choosing Fast is the go-ahead, so it prepares on its own.
   await expect(page.locator('#conversation-start')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:fast']);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // The phone shell: one screen, a tab bar, and no page scroll in either direction.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole('tab', { name: 'Talk', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.documentElement.scrollHeight <= innerHeight)).toBe(true);
   // ChatGPT sign-in calls are the point here; inference routes still never leave the device.
   expect(requests.filter(url => new URL(url).pathname.startsWith('/api/') && !/^\/api\/(voice|codex)\//.test(new URL(url).pathname))).toEqual([]);
   expect(errors).toEqual([]);

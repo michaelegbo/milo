@@ -24,6 +24,8 @@ const paths: Record<string, string> = {
   check: '<path d="m5 12 4 4L19 6"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-11v1"/>',
+  mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/>',
+  sliders: '<path d="M4 7h10m4 0h2M4 17h4m4 0h8"/><circle cx="16" cy="7" r="2.5"/><circle cx="10" cy="17" r="2.5"/>',
 };
 const icon = (name: string, className = '') => `<svg class="icon ${className}" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.spark}</svg>`;
 const defaults = { selected: 0, mode: 'presets', custom: '', voice: 'am_michael', speed: 1, gestures: !matchMedia('(prefers-reduced-motion: reduce)').matches, motion: !matchMedia('(prefers-reduced-motion: reduce)').matches };
@@ -73,6 +75,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <section class="audio-strip" aria-label="Generated speech audio"><div class="track-info"><span class="track-icon">${icon('wave')}</span><div><span id="track-title">A voice waiting to happen</span><span class="track-caption" id="track-caption">Your next little moment starts above.</span></div></div><div id="waveform" class="waveform" aria-hidden="true">${Array.from({ length: 64 }, () => '<i></i>').join('')}</div><span class="track-time" id="track-time">0:00 <span>/ 0:00</span></span><button class="icon-button download" id="download" aria-label="Download generated speech as WAV" title="Download WAV" disabled>${icon('download')}</button></section>
     <footer class="footer"><span><span class="tiny-spark">✳</span> A little more human, one sentence at a time.</span><button id="engine-info"><span id="engine-dot" class="status-dot loading"></span><span id="engine-label">Kokoro voice · Connecting</span>${icon('info')}</button></footer>
   </main>
+    <nav id="app-tabs" class="app-tabs" aria-label="Milo sections" role="tablist"><button id="app-tab-studio" role="tab" aria-selected="false">${icon('wave')}<span>Studio</span></button><button id="app-tab-talk" role="tab" aria-selected="false">${icon('mic')}<span>Talk</span></button><button id="app-tab-setup" role="tab" aria-selected="false">${icon('sliders')}<span>Setup</span></button></nav>
   <dialog id="about-dialog"><div class="dialog-heading"><span class="eyebrow">BEHIND THE VOICE</span><button id="close-about" class="icon-button" aria-label="Close information">${icon('close')}</button></div><h2>Small character.<br>A voice all its own.</h2><p>Milo is made with Three.js. It leans in to listen, glances aside while thinking, and uses a small vocabulary of LED expressions. Articulated hands, body turns, and nods follow the rhythm of speech.</p><p>The voice comes from <strong>Kokoro</strong>, an open-source text-to-speech model running on your computer’s CPU. No GPU or paid voice service is needed.</p><div class="about-note">The first launch downloads the voice model. Conversation adds local listening and reply models; Hybrid can choose a stronger reply model. Everything runs locally. Optional GPU acceleration speeds up replies on compatible hardware; listening and speech stay on CPU. Conversation history stays in this tab and clears on reload.</div><p class="about-limit">Mouth shape follows audio loudness and frequency bands. It is an approximation, not phoneme-accurate lip sync. Simple wording cues give Milo a warm, curious, encouraging, or thoughtful delivery; they do not infer your emotions. Conversation adds Whisper for English speech recognition and Qwen for local replies. Microphone controls let you speak, pause listening, and interrupt Milo.</p><a href="https://github.com/hexgrad/kokoro" target="_blank" rel="noreferrer">Explore Kokoro ${icon('arrow')}</a></dialog>
 `;
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -180,8 +183,22 @@ conversation = createConversation({
   onStateChange: renderPlayback,
   device: devicePanel && { start: () => devicePanel.start(), stop: () => devicePanel.stop(), describe: () => devicePanel.describe() },
 });
+// On a phone the page is an app shell: one screen at a time behind a Studio · Talk · Setup tab bar.
+type MobileTab = 'studio' | 'talk' | 'setup';
+const phoneLayout = matchMedia('(max-width: 700px)');
+let mobileTab: MobileTab = 'studio';
+function setMobileTab(tab: MobileTab) {
+  mobileTab = tab;
+  document.body.dataset.mobileTab = tab;
+  for (const name of ['studio', 'talk', 'setup'] as const) { const button = el(`app-tab-${name}`); button.setAttribute('aria-selected', String(name === tab)); button.tabIndex = name === tab ? 0 : -1; }
+  if (tab === 'talk') setStudioMode(true);
+  if (tab === 'studio') setStudioMode(false);
+  if (tab === 'setup' && phoneLayout.matches) el('device-setup').scrollTop = 0;
+}
+for (const name of ['studio', 'talk', 'setup'] as const) el(`app-tab-${name}`).addEventListener('click', () => setMobileTab(name));
 function setStudioMode(value: boolean) {
   devicePanel?.setConversation(value);
+  if (mobileTab !== 'setup') { mobileTab = value ? 'talk' : 'studio'; document.body.dataset.mobileTab = mobileTab; for (const name of ['studio', 'talk', 'setup'] as const) el(`app-tab-${name}`).setAttribute('aria-selected', String(name === mobileTab)); }
   if (value === conversationMode) return;
   conversationMode = value;
   deliveryMood = 'neutral';
@@ -284,6 +301,8 @@ function updateTrack() {
   animationFrame = requestAnimationFrame(updateTrack);
 }
 renderSettings(); void checkHealth(); updateTrack();
+// Phones open on Talk, the screen the tab bar centres on; desktops keep the studio first.
+setMobileTab(phoneLayout.matches ? 'talk' : 'studio');
 window.addEventListener('pagehide', (event) => {
   if (event.persisted) { conversation?.cancel(); player.stop(); return; }
   conversation?.dispose(); devicePanel?.dispose(); clearInterval(healthTimer); cancelAnimationFrame(animationFrame); avatar?.dispose(); player.dispose();

@@ -49,6 +49,7 @@ test('real CPU speech reaches the audio graph, animates, pauses, resumes, ends, 
 test('custom text, voice and speed persist; blank text stays disabled; mobile remains usable', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
+  await page.getByRole('tab', { name: 'Studio', exact: true }).click(); // phones open on Talk
   await page.getByRole('tab', { name: 'Write your own' }).click();
   await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeDisabled();
   await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('Hello! This is my own sentence.');
@@ -56,6 +57,7 @@ test('custom text, voice and speed persist; blank text stays disabled; mobile re
   await page.getByRole('slider', { name: 'Speech pace' }).fill('0.8');
   await page.locator('.gesture-toggle').click();
   await page.reload();
+  await page.getByRole('tab', { name: 'Studio', exact: true }).click();
   await expect(page.getByRole('textbox')).toHaveValue('Hello! This is my own sentence.');
   await expect(page.locator('#voice')).toHaveValue('bf_emma');
   await expect(page.locator('#speed')).toHaveValue('0.8');

@@ -125,8 +125,13 @@ test('Hybrid displays quick and considered routes while retaining mode, prior tu
   await page.screenshot({ path: testInfo.outputPath('hybrid-desktop-thinking.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  for (const id of ['conversation-model', 'mic-device', 'mic-toggle', 'conversation-voice', 'conversation-start', 'conversation-input']) await expect(page.locator(`#${id}`)).toBeVisible();
+  // On a phone the settings live on the Setup screen and the controls on Talk.
+  await page.getByRole('tab', { name: 'Setup', exact: true }).click();
+  for (const id of ['conversation-model', 'mic-device', 'mic-toggle', 'conversation-voice']) await expect(page.locator(`#${id}`)).toBeVisible();
+  await page.getByRole('tab', { name: 'Talk', exact: true }).click();
+  for (const id of ['conversation-start', 'conversation-input']) await expect(page.locator(`#${id}`)).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('hybrid-mobile-thinking.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1024 });
   state.holdSpeech = false;
   state.releaseSpeech!();
   await expect(page.locator('#conversation-panel')).toHaveAttribute('data-state', 'idle');

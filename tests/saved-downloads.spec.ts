@@ -14,8 +14,10 @@ test('saved files survive reload, show reuse, and detect deletion without a down
   await expect(page.getByRole('button',{name:/Start saved voice/})).toBeEnabled();
   await expect(page.locator('#device-saved-status')).toContainText('Listening: saved');
   await page.setViewportSize({width:390,height:844});
+  await page.getByRole('tab',{name:'Setup',exact:true}).click();
   await page.locator('#device-setup').screenshot({path:testInfo.outputPath('saved-downloads-mobile.png')});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+  await page.setViewportSize({width:1440,height:1024});
   await page.evaluate(async()=>{
     const {AUDIO_FILES,audioFileUrl}=await import('/src/device/saved-downloads.ts' as string);
     await(await caches.open('transformers-cache')).delete(audioFileUrl(AUDIO_FILES.tts.model,'config.json'));

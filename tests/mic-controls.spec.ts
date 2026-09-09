@@ -280,7 +280,9 @@ test('permission action reveals microphones, releases discovery tracks, and uses
   await expect(page.getByRole('combobox',{name:'Microphone input'})).toHaveValue('usb-mic');
   expect(await calls(page)).toBe(1);
   await page.setViewportSize({width:390,height:844});
+  await page.getByRole('tab',{name:'Setup',exact:true}).click();
   await page.locator('.mic-controls').screenshot({path:testInfo.outputPath('microphone-selection-mobile.png')});
+  await page.setViewportSize({width:1440,height:1024});
   await page.getByRole('button',{name:'Start conversation',exact:true}).click();
   await expect.poll(()=>calls(page)).toBe(2);
   expect(await page.evaluate(()=>(window as any).__micControls.calls[1].audio.deviceId)).toEqual({exact:'usb-mic'});

@@ -62,3 +62,57 @@ dialog{color:var(--ink);width:460px;max-width:calc(100vw - 36px);max-height:calc
 /* Loading models happens behind a modal that stays until Milo is ready. */
 .conversation-loading{width:420px;text-align:left}.conversation-loading h2{font-size:24px;letter-spacing:-.8px;margin:14px 0 10px}.conversation-loading p{margin:0 0 14px;font-size:12px;line-height:1.7;color:#5f6d52}.conversation-loading progress{display:block;width:100%;height:6px;accent-color:#78925d;margin:0 0 16px}.conversation-loading-actions{display:flex;align-items:center;justify-content:space-between;gap:12px}.conversation-loading-actions span{font-size:10px;color:#8b947f;line-height:1.5}.conversation-loading-actions .text-button{min-height:40px;flex-shrink:0}
 .conversation-connect .codex-code-row{margin:12px 0}.conversation-connect-buttons{display:flex;gap:10px;align-items:center}.conversation-connect .primary-button{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:10px 18px;font-size:12px;color:#fffff7;text-decoration:none}
+
+/* Phone app shell: one screen at a time, a docked composer and a bottom tab bar; no page scroll. Desktop is untouched. */
+.app-tabs{display:none}
+@media(max-width:700px){
+  html,body{height:100%}
+  body{height:100%;min-width:320px;overflow:hidden}
+  #app{display:flex;flex-direction:column;height:100dvh;overflow:hidden}
+  .header{height:56px;padding:0 16px;margin:0;max-width:none;flex-shrink:0;border-bottom:1px solid var(--line)}
+  .header nav{display:none}
+  .brand{font-size:24px;gap:8px}.brand-symbol{width:28px;height:28px;border-radius:9px}
+  main{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 12px;max-width:none;margin:0;overflow:hidden}
+  .intro,.studio-modes,.footer,.edition,.device-source-links,.audio-strip{display:none}
+  .workspace{flex:1;min-height:0;display:flex;flex-direction:column;gap:10px;padding-top:10px}
+  .character-panel{flex:0 0 auto;height:32dvh;min-height:190px;border-radius:16px}
+  .character-panel .preview-tools{height:44px;padding:0 12px}
+  .character-panel .preview-header{top:12px;left:14px;right:14px}
+  .character-signature{bottom:52px;left:16px}.character-signature h2{font-size:26px}.character-signature p{font-size:9px}
+  #avatar-canvas{inset:20px 0 40px}
+  .script-panel{flex:1;min-height:0;overflow:auto;padding:16px 16px 12px;border-radius:16px}
+  .script-panel .panel-heading{margin-bottom:12px}.script-panel textarea{height:140px;min-height:100px}
+  .script-panel .speech-actions{position:sticky;bottom:-12px;background:#fffefb;padding:10px 0 12px;margin-top:4px}
+  .script-panel .speech-status{position:sticky;bottom:-12px;background:#fffefb;margin:0;padding-bottom:12px}
+  /* Talk: the transcript fills the screen and the controls dock at the bottom. */
+  .conversation-panel{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:12px 14px 8px;border-radius:16px}
+  .conversation-panel>.panel-heading,.conversation-panel>.conversation-engines,.conversation-panel>.reply-provider-panel,.conversation-panel>.conversation-model,.conversation-panel>.conversation-acceleration,.conversation-panel>.mic-controls,.conversation-panel>.conversation-preferences,.conversation-panel>.conversation-interruption,.conversation-panel>.conversation-memory,.conversation-panel>.conversation-note{display:none}
+  .conversation-panel>.conversation-next{order:0;margin:0 0 8px}
+  .conversation-panel>.conversation-log{order:1;flex:1;min-height:0;height:auto;padding:4px 2px}
+  .conversation-panel .conversation-log{height:auto}
+  .conversation-panel>.conversation-feedback{order:2;min-height:34px;margin:0}
+  .conversation-panel>.conversation-controls{order:3;margin:6px 0 8px}
+  .conversation-panel>.conversation-composer{order:4;min-height:48px;border-radius:12px}
+  .conversation-controls .primary-button{min-height:52px;font-size:13px;border-radius:26px}
+  .conversation-controls .stop-button{width:52px;border-radius:26px}
+  .conversation-empty{padding:8px 0}.conversation-spark{font-size:30px;margin-bottom:10px}.conversation-empty h3{font-size:15px}.conversation-empty p{font-size:11px;margin-bottom:10px}
+  /* Setup: downloads, provider, model and microphone settings, scrolling as a normal page. */
+  /* An open confirmation dialog belongs to the setup panel, so the panel stays while it is open. */
+  body:not([data-mobile-tab=setup]) .device-setup:not(:has(dialog[open])){display:none}
+  body[data-mobile-tab=setup] main{overflow:auto}
+  body[data-mobile-tab=setup] .workspace{flex:0 0 auto;padding-bottom:12px}
+  body[data-mobile-tab=setup] .character-panel,body[data-mobile-tab=setup] .script-panel{display:none}
+  body[data-mobile-tab=setup] .device-setup{display:grid;grid-template-columns:1fr;gap:14px;margin:10px 0 0;padding:18px 16px;scroll-margin-top:0}
+  body[data-mobile-tab=setup] .conversation-panel{flex:0 0 auto;overflow:visible;display:block;padding:16px 16px 12px}
+  body[data-mobile-tab=setup] .conversation-panel>.conversation-next,body[data-mobile-tab=setup] .conversation-panel>.conversation-log,body[data-mobile-tab=setup] .conversation-panel>.conversation-feedback,body[data-mobile-tab=setup] .conversation-panel>.conversation-controls,body[data-mobile-tab=setup] .conversation-panel>.conversation-composer{display:none}
+  body[data-mobile-tab=setup] .conversation-panel>.panel-heading{display:flex}
+  body[data-mobile-tab=setup] .conversation-panel>.conversation-engines,body[data-mobile-tab=setup] .conversation-panel>.reply-provider-panel,body[data-mobile-tab=setup] .conversation-panel>.conversation-memory,body[data-mobile-tab=setup] .conversation-panel>.conversation-note{display:block}
+  body[data-mobile-tab=setup] .conversation-panel>.conversation-model,body[data-mobile-tab=setup] .conversation-panel>.conversation-acceleration,body[data-mobile-tab=setup] .conversation-panel>.mic-controls,body[data-mobile-tab=setup] .conversation-panel>.conversation-interruption{display:grid}
+  body[data-mobile-tab=setup] .conversation-panel>.conversation-preferences{display:flex}
+  /* Tab bar */
+  .app-tabs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));flex:0 0 auto;height:auto;border-top:1px solid var(--line);background:#fffefb;padding:6px 12px calc(10px + env(safe-area-inset-bottom))}
+  .app-tabs button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:52px;font-size:10px;font-weight:500;color:#8a9082;padding:4px 0;border-radius:10px}
+  .app-tabs button .icon{width:22px;height:22px}
+  .app-tabs button[aria-selected=true]{color:#35442f;font-weight:600}
+  .app-tabs button[aria-selected=true]:after{content:'';width:4px;height:4px;border-radius:50%;background:var(--accent)}
+}
