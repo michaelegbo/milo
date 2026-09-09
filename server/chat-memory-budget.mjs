@@ -11,9 +11,18 @@ export const MEMORY_RESERVE = 2 * GiB;
 let cached;
 let cachedAt = 0;
 
+// libuv's process.availableMemory includes Linux cgroup limits and usage;
+// os.freemem alone can report the entire host's RAM inside a container.
+export function availableChatMemory(physical = freemem(), available = process.availableMemory?.(), constrained = process.constrainedMemory?.()) {
+  const values = [physical];
+  if (Number.isFinite(available) && available >= 0) values.push(available);
+  if (Number.isFinite(constrained) && constrained > 0) values.push(constrained);
+  return Math.max(0, Math.min(...values));
+}
+
 export async function readChatMemoryBudget({ refresh = false } = {}) {
-  if (!refresh && cached && Date.now() - cachedAt < 5000) return { ...cached, freeBytes: Math.min(cached.freeBytes, freemem()) };
-  const physical = freemem();
+  const physical = availableChatMemory();
+  if (!refresh && cached && Date.now() - cachedAt < 5000) return { ...cached, freeBytes: Math.min(cached.freeBytes, physical) };
   let commitFreeBytes = null;
   let freeBytes = physical;
   let reliable = process.platform !== 'win32';

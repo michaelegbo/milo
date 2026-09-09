@@ -1,3 +1,5 @@
+import { apiFetch } from './transport';
+import { isDeviceOnly } from './deployment';
 import { encodeWav, resampleAudio } from './microphone';
 export type PlaybackState = 'idle' | 'generating' | 'playing' | 'paused' | 'error';
 
@@ -52,11 +54,11 @@ export class SpeechPlayer {
     this.onChange();
     const request = new AbortController();
     this.request = request;
-    const timeout = window.setTimeout(() => request.abort('timeout'), 180_000);
+    const timeout = window.setTimeout(() => request.abort('timeout'), isDeviceOnly ? 20 * 60_000 : 180_000);
     try {
       await this.initialize();
       if (id !== this.generation) return;
-      const response = await fetch('/api/speech', {
+      const response = await apiFetch('/api/speech', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, voice, speed }), signal: request.signal,
       });
@@ -86,7 +88,7 @@ export class SpeechPlayer {
       if (id !== this.generation) return;
       this.state = 'error';
       this.error = request.signal.aborted ? 'That took too long. Try a shorter sentence or try again.'
-        : error instanceof TypeError ? 'Cannot reach the local voice. Start the app with npm run dev, then try again.'
+        : error instanceof TypeError ? isDeviceOnly ? 'The voice could not run in this browser. Free some memory and try loading it again above.' : 'Cannot reach the local voice. Start the app with npm run dev, then try again.'
         : error instanceof Error ? error.message : 'Something went wrong. Please try again.';
       this.onChange();
     } finally {
@@ -125,12 +127,12 @@ export class SpeechPlayer {
     this.request = request;
     this.streamOpen = true;
     this.state = 'generating'; this.onChange();
-    const timeout = window.setTimeout(() => request.abort('timeout'), 180_000);
+    const timeout = window.setTimeout(() => request.abort('timeout'), isDeviceOnly ? 20 * 60_000 : 180_000);
     try {
       await this.initialize();
       for await (const text of sentences) {
         if (id !== this.generation) return;
-        const response = await fetch('/api/speech', {
+        const response = await apiFetch('/api/speech', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, voice, speed }), signal: request.signal,
         });

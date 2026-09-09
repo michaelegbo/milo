@@ -24,7 +24,9 @@ function initialize() {
     const modelPath = await resolveChatModel(profile, update);
     update({ status: 'loading', progress: 96, message: `Loading the ${profile.label} conversation model on ${gpuBackend ? 'GPU' : 'CPU'}.` });
     const library = await import('node-llama-cpp');
-    const threads = Math.max(1, Math.min(6, availableParallelism() - 1));
+    const configuredThreads = Number(process.env.CHAT_THREADS);
+    const threadLimit = Number.isInteger(configuredThreads) && configuredThreads > 0 ? configuredThreads : 6;
+    const threads = Math.max(1, Math.min(6, threadLimit, availableParallelism() - 1));
     const llama = await library.getLlama({ gpu: gpuBackend || false, maxThreads: threads, logLevel: 'error', build: 'never', skipDownload: true });
     if (gpuBackend ? llama.gpu !== gpuBackend : llama.gpu !== false) throw new Error('The conversation engine loaded a different device than requested.');
     const model = await llama.loadModel({ modelPath, gpuLayers: gpuBackend ? { min: 1, fitContext: { contextSize: 6144 } } : 0, useMmap: true });

@@ -1,3 +1,6 @@
+import { apiFetch } from './transport';
+import { isDeviceOnly, MILO_REPOSITORY } from './deployment';
+import { createDevicePanel } from './device/panel';
 import './style.css';
 import { createAvatar, type AvatarPresence } from './avatar';
 import { SpeechPlayer } from './speech';
@@ -45,11 +48,12 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
   <header class="header">
     <a class="brand" href="/" aria-label="Milo home"><span class="brand-symbol"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 17V7l9 8 9-8v10" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>milo<span class="brand-period">.</span></span></a>
     <nav aria-label="Main navigation"><span class="nav-active" aria-current="page">Avatar studio</span><button id="about-button">Behind the voice ${icon('arrow')}</button></nav>
-    <div class="local-label"><span class="status-dot"></span> Made to run locally</div>
+    <div class="local-label"><span class="status-dot"></span> ${isDeviceOnly ? 'AI in your browser' : 'Made to run locally'}</div>
   </header>
   <main>
-    <section class="intro" aria-labelledby="page-title"><div><div class="eyebrow">A LITTLE EXPERIMENT IN EXPRESSION</div><h1 id="page-title">Give a little character a voice<span>.</span></h1><p>Choose the words. Milo will do the talking.</p></div><span class="edition">STUDIO / 001</span></section>
+    <section class="intro" aria-labelledby="page-title"><div><div class="eyebrow">A LITTLE EXPERIMENT IN EXPRESSION</div><h1 id="page-title">Give a little character a voice<span>.</span></h1><p>Choose the words. Milo will do the talking.</p>${isDeviceOnly ? `<div class="device-source-links"><a href="${MILO_REPOSITORY}" target="_blank" rel="noreferrer">View source ${icon('arrow')}</a><a href="${MILO_REPOSITORY}/archive/refs/heads/main.zip">Download Milo ${icon('download')}</a><span>Free for personal, noncommercial use</span></div>` : ''}</div><span class="edition">STUDIO / 001</span></section>
     <div class="studio-modes" role="tablist" aria-label="Studio mode"><button id="studio-mode" role="tab" aria-selected="true" aria-controls="script-section">Sentence studio</button><button id="conversation-mode" role="tab" aria-selected="false" aria-controls="conversation-panel" tabindex="-1">Conversation <span>NEW</span></button></div>
+    <section id="device-setup" class="device-setup" aria-label="Start Milo on your device" ${isDeviceOnly ? '' : 'hidden'}></section>
     <div class="workspace">
       <section class="character-panel" aria-label="Milo 3D avatar preview">
         <div class="preview-header"><span class="eyebrow">MEET YOUR CHARACTER</span><span class="preview-badge" id="avatar-state"><span class="status-dot"></span> Ready when you are</span></div>
@@ -97,13 +101,20 @@ try { avatar = createAvatar(el('avatar-canvas'), () => player.getAudio(), readAv
   el('avatar-canvas').textContent = 'The 3D preview needs WebGL. Enable hardware acceleration in your browser and reload. You can still use the voice controls.';
   console.error(error);
 }
-let health: 'connecting' | 'loading' | 'ready' | 'error' = 'connecting';
+let health: 'connecting' | 'unloaded' | 'loading' | 'ready' | 'error' = isDeviceOnly ? 'unloaded' : 'connecting';
 let healthMessage = '';
 let activeText = '';
 let activeTitle = '';
 let waveformKey = player.waveform;
 const waveformBars = Array.from(el('waveform').children) as HTMLElement[];
 const time = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+const devicePanel = isDeviceOnly ? createDevicePanel(el('device-setup'), () => { conversation?.cancel(); player.stop(); }) : undefined;
+if (isDeviceOnly) {
+  document.body.dataset.deployment = 'device';
+  const note = document.querySelector<HTMLElement>('.about-note')!;
+  note.textContent = 'This browser edition downloads Kokoro, Whisper, and Qwen only after you choose Download & start. Voice and listening run on your CPU; compatible browsers can accelerate replies with the GPU. Text, recorded audio, and replies are never sent to an inference server. Models can be cached; your browser may remove them when storage is needed. Chat history is held in this tab and clears on reload. Large models may not fit on phones or tablets; no server fallback is used.';
+  el('retry').textContent = 'Open model setup';
+}
 
 function renderSettings() {
   const custom = settings.mode === 'custom';
@@ -142,6 +153,7 @@ function renderPlayback() {
   el('avatar-state').classList.toggle('is-speaking', speaking);
   document.querySelector('.audio-strip')?.classList.toggle('is-playing', speaking);
   let status = health === 'ready' ? 'All set. Press play and meet your voice.' : health === 'loading' ? 'Preparing the voice. The first download can take a few minutes.' : health === 'error' ? healthMessage : 'Connecting to the local voice…';
+  if (isDeviceOnly && health === 'unloaded') status = 'Choose Download & start voice above. Your words stay on this device.';
   if (busy) status = 'Making your sentence on the CPU. The first one can take a little longer.';
   if (speaking) status = 'Milo is speaking. The mouth moves with the sound.';
   if (paused) status = 'Paused. Continue whenever you’re ready.';
@@ -152,7 +164,7 @@ function renderPlayback() {
   el('retry').hidden = health !== 'error';
   el('track-title').textContent = busy ? 'A little voice in the making…' : player.hasAudio ? activeTitle : 'A voice waiting to happen';
   el('track-caption').textContent = player.hasAudio ? activeText : 'Your next little moment starts above.';
-  el('engine-label').textContent = `Kokoro voice · ${health === 'ready' ? 'CPU ready' : health === 'loading' ? 'Preparing' : health === 'error' ? 'Offline' : 'Connecting'}`;
+  el('engine-label').textContent = `Kokoro voice · ${health === 'ready' ? isDeviceOnly ? 'Browser CPU ready' : 'CPU ready' : health === 'unloaded' ? 'Not loaded' : health === 'loading' ? 'Preparing' : health === 'error' ? 'Offline' : 'Connecting'}`;
   el('engine-dot').className = `status-dot ${health === 'ready' ? '' : health === 'error' ? 'offline' : 'loading'}`;
 }
 player.onChange = () => { renderPlayback(); conversation?.onPlaybackChange(); };
@@ -164,6 +176,7 @@ conversation = createConversation({
   onStateChange: renderPlayback,
 });
 function setStudioMode(value: boolean) {
+  devicePanel?.setConversation(value);
   if (value === conversationMode) return;
   conversationMode = value;
   deliveryMood = 'neutral';
@@ -228,15 +241,16 @@ async function checkHealth() {
   if (healthBusy) return;
   healthBusy = true;
   try {
-    const response = await fetch('/api/health', { signal: AbortSignal.timeout(5000) });
+    const response = await apiFetch('/api/health', { signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error('offline');
     const body = await response.json();
-    health = ['ready', 'loading', 'error'].includes(body.status) ? body.status : 'loading';
-    healthMessage = body.status === 'error' ? 'The voice could not load. Check your internet connection and restart the local app.' : '';
-  } catch { health = 'error'; healthMessage = 'The local voice is offline. Start the app with npm run dev, then reconnect.'; }
+    health = ['ready', 'loading', 'error', ...(isDeviceOnly ? ['unloaded'] : [])].includes(body.status) ? body.status : 'loading';
+    healthMessage = body.status === 'error' ? isDeviceOnly ? body.message || 'The model could not load on this device. Use model setup above to try again.' : 'The voice could not load. Check your internet connection and restart the local app.' : '';
+  } catch { health = 'error'; healthMessage = isDeviceOnly ? 'The browser engine could not start. Use model setup above to try again. No words were sent to a server.' : 'The local voice is offline. Start the app with npm run dev, then reconnect.'; }
   finally { healthBusy = false; renderPlayback(); }
 }
-el('retry').addEventListener('click', () => void checkHealth());
+el('retry').addEventListener('click', () => { if (isDeviceOnly) { el('device-setup').scrollIntoView({ block: 'center' }); el('device-start').focus(); } else void checkHealth(); });
+if (isDeviceOnly) window.addEventListener('milo-device-change', () => void checkHealth());
 const healthTimer = window.setInterval(() => void checkHealth(), 5000);
 let animationFrame = 0;
 function updateTrack() {
@@ -252,5 +266,5 @@ function updateTrack() {
 renderSettings(); void checkHealth(); updateTrack();
 window.addEventListener('pagehide', (event) => {
   if (event.persisted) { conversation?.cancel(); player.stop(); return; }
-  conversation?.dispose(); clearInterval(healthTimer); cancelAnimationFrame(animationFrame); avatar?.dispose(); player.dispose();
+  conversation?.dispose(); devicePanel?.dispose(); clearInterval(healthTimer); cancelAnimationFrame(animationFrame); avatar?.dispose(); player.dispose();
 });

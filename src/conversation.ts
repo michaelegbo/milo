@@ -1,3 +1,5 @@
+import { apiFetch } from './transport';
+import { isDeviceOnly } from './deployment';
 import { MicrophoneRecorder } from './microphone';
 import type { SpeechPlayer } from './speech';
 import { readReplyStream, rememberExplicitFacts, type ChatMessage as Message, type ConversationMemory } from './conversation-memory';
@@ -5,7 +7,7 @@ import { readReplyStream, rememberExplicitFacts, type ChatMessage as Message, ty
 type State = 'idle' | 'listening' | 'transcribing' | 'thinking' | 'voicing' | 'speaking' | 'error';
 type ChatMode = 'fast' | 'quality' | 'hybrid';
 type ReplyRoute = { profile: 'fast' | 'quality'; reason: string };
-type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'vulkan' | 'cuda' | null; deviceName: string | null; message: string; revision: number };
+type Acceleration = { available: boolean; enabled: boolean; status: 'detecting' | 'ready' | 'switching' | 'unavailable' | 'error'; backend: 'vulkan' | 'cuda' | 'webgpu' | null; deviceName: string | null; message: string; revision: number };
 type Engine = { status: string; progress?: number; message?: string; profile?: string; queueDepth?: number; selectedModel?: string | null; residency?: 'dual' | 'single'; residencyReason?: string; device?: 'cpu' | 'gpu' | null; acceleration?: Acceleration; residentModels?: Record<string, { status: string; device?: 'cpu' | 'gpu' | null }> };
 type Health = { stt: Engine; chat: Engine; tts: Engine };
 const labels: Record<State, string> = { idle: 'Ready to talk', listening: 'Listening to you', transcribing: 'Hearing your words', thinking: 'Milo is thinking', voicing: 'Finding Milo’s voice', speaking: 'Milo is speaking', error: 'Let’s try again' };
@@ -73,6 +75,11 @@ export function createConversation(options: {
     el<HTMLSelectElement>('conversation-model').disabled = gpuIntent !== undefined || health?.chat.acceleration?.status === 'switching' || ownsPlayback || recorder.active || Boolean(summaryRequest) || !health || health.chat.status === 'loading' || (health.chat.queueDepth ?? 0) > 0 || !['idle', 'error'].includes(state);
     el('model-hint').textContent = profile === 'fast' ? 'Quick, everyday conversation. 1.1 GB on first use.' : profile === 'quality' ? 'More capable replies. 2.5 GB on first use; slower on CPU.' : health?.chat.acceleration?.enabled ? health.chat.residency === 'dual' ? 'Quick on CPU. Deeper replies on GPU. Both stay ready.' : 'Quick on CPU. Deeper replies load onto the GPU.' : health?.chat.residency === 'single' ? 'Adapts each reply. Models load as needed to save memory.' : 'Quick for simple turns. More thought when it matters.';
     el('model-hint').title = profile === 'hybrid' ? health?.chat.residencyReason || 'Both local models are prepared when memory allows. First use downloads 3.6 GB in total.' : '';
+    if (isDeviceOnly) {
+      (container.querySelector('.conversation-acceleration') as HTMLElement).hidden = !health?.chat.acceleration?.available && !health?.chat.acceleration?.enabled;
+      (container.querySelector('.conversation-note') as HTMLElement).textContent = `English voice · AI stays in this browser · ${health?.chat.device === 'gpu' ? 'GPU replies' : 'CPU'}`;
+      if (profile === 'hybrid') el('model-hint').textContent = 'Adapts each reply. One model is loaded at a time.';
+    }
     el('conversation-route').hidden = profile !== 'hybrid';
     el('conversation-route').dataset.depth = replyRoute?.profile || 'auto';
     el('route-label').textContent = !replyRoute ? 'Chooses for each reply' : replyRoute.profile === 'fast' ? 'Quick reply' : ['thinking', 'voicing'].includes(state) ? 'Thinking deeper' : 'Considered reply';
@@ -85,7 +92,7 @@ export function createConversation(options: {
     const toggle = el<HTMLButtonElement>('gpu-toggle');
     toggle.setAttribute('aria-checked', String(gpuEnabled));
     // OFF remains available while a GPU model is loading or answering.
-    toggle.disabled = !gpuEnabled && !acceleration?.available;
+    toggle.disabled = !gpuEnabled && (!acceleration?.available || isDeviceOnly && health?.chat.status === 'unloaded');
     toggle.title = 'Switching stops the current turn and reloads the same models. Your chat and memory stay here.';
     el('gpu-toggle-label').textContent = gpuEnabled ? 'On' : 'Off';
     el('gpu-device').textContent = acceleration?.deviceName || (acceleration?.status === 'unavailable' ? 'Compatible GPU unavailable' : 'Checking compatible hardware…');
@@ -100,8 +107,9 @@ export function createConversation(options: {
     el('mic-state').textContent = micMuted ? 'Mic muted' : monitoring ? 'Listening for interruption' : state === 'listening' ? micLive ? 'Listening' : 'Waiting for permission' : ['transcribing', 'thinking', 'voicing', 'speaking'].includes(state) ? 'Mic paused' : 'Mic idle';
     el('conversation-engines').textContent = healthError || (!health ? 'Connecting to your local engines…' : [
       ['Whisper', health.stt], [(health.chat.profile ?? profile) === 'hybrid' ? 'Hybrid' : (health.chat.profile ?? profile) === 'quality' ? 'Qwen 4B' : 'Qwen 1.5B', health.chat], ['Kokoro', health.tts],
-    ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
+    ].map(([name, value]) => { const engine = value as Engine; return `${name} ${engine.status === 'ready' ? '✓' : engine.status === 'unloaded' ? 'not loaded' : engine.status === 'error' ? 'unavailable' : Number.isFinite(engine.progress) ? `${Math.round(engine.progress!)}%` : 'loading'}`; }).join('   ·   '));
     el('conversation-engines').title = 'All inference stays on this computer. Conversation replies can use the GPU; listening and speech use CPU. Models are cached for later use.';
+    if (isDeviceOnly) el('conversation-engines').title = 'Listening and voice run on your browser’s CPU. Compatible browsers can accelerate replies with the GPU. Choose Download & start above to prepare them. No server fallback.';
     el('conversation-retry').hidden = !healthError && !Object.values(health ?? {}).some(engine => engine.status === 'error');
     options.onStateChange();
   }
@@ -166,7 +174,7 @@ export function createConversation(options: {
   }
   async function post(path: string, body: Blob | object, signal: AbortSignal) {
     const audio = body instanceof Blob;
-    const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': audio ? 'audio/wav' : 'application/json' }, body: audio ? body : JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) });
+    const response = await apiFetch(path, { method: 'POST', headers: { 'Content-Type': audio ? 'audio/wav' : 'application/json' }, body: audio ? body : JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(120_000)]) });
     const result = await response.json();
     if (!response.ok) throw new Error(result.message || 'Milo could not finish that turn. Please try again.');
     return result;
@@ -206,10 +214,10 @@ export function createConversation(options: {
     let paragraph: HTMLElement | undefined;
     async function* sentences() {
       let spokenBuffer = '';
-      const response = await fetch('/api/chat/stream', {
+      const response = await apiFetch('/api/chat/stream', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: context, memory: memory(), profile }),
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(isDeviceOnly ? 20 * 60_000 : 180_000)]),
       });
       for await (const event of readReplyStream(response)) {
         if (token !== version || !visible) return;
@@ -334,9 +342,9 @@ export function createConversation(options: {
     const controller = new AbortController();
     gpuRequest = controller;
     try {
-      const response = await fetch('/api/conversation/acceleration', {
+      const response = await apiFetch('/api/conversation/acceleration', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(isDeviceOnly ? 20 * 60_000 : 10000)]),
       });
       const result = await response.json();
       if (epoch !== gpuEpoch || disposed) return;
@@ -357,7 +365,7 @@ export function createConversation(options: {
     checking = true;
     const epoch = gpuEpoch;
     try {
-      const response = await fetch('/api/conversation/health', { signal: AbortSignal.timeout(5000) });
+      const response = await apiFetch('/api/conversation/health', { signal: AbortSignal.timeout(5000) });
       if (!response.ok) throw new Error('offline');
       const next: Health = await response.json();
       if (epoch !== gpuEpoch || !visible) return;
@@ -373,7 +381,7 @@ export function createConversation(options: {
       // A cancelled worker may still be draining when a profile was selected.
       // Retry that selection once it is idle, instead of leaving the UI stranded.
       if (profilePending && health?.chat.profile && health.chat.profile !== profile && health.chat.status !== 'loading' && !(health.chat.queueDepth ?? 0) && ['idle', 'error'].includes(state)) void prepare();
-    } catch { if (epoch === gpuEpoch) { healthError = 'Local conversation is offline. Start the app, then try loading again.'; health = undefined; } }
+    } catch { if (epoch === gpuEpoch) { healthError = isDeviceOnly ? 'The browser engines could not start. Use model setup above to try again.' : 'Local conversation is offline. Start the app, then try loading again.'; health = undefined; } }
     finally { checking = false; if (visible) render(); }
   }
   async function prepare() {
@@ -381,13 +389,13 @@ export function createConversation(options: {
     preparing = true; profilePending = true;
     const token = version;
     try {
-      const response = await fetch('/api/conversation/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }), signal: AbortSignal.timeout(5000) });
+      const response = await apiFetch('/api/conversation/prepare', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile }), signal: AbortSignal.timeout(5000) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message || 'Cannot prepare the selected model.');
       if (!visible || token !== version) return;
       acceptHealth(result); healthError = '';
       if (!health?.chat.profile || health.chat.profile === profile) profilePending = false;
-      if (!voiceReady() && ['idle', 'error'].includes(state)) setState('idle', profile === 'hybrid' ? 'Preparing Hybrid. Milo will choose the right model for each reply.' : profile === 'quality' ? 'Preparing the 4B model. First use downloads 2.5 GB; later runs use the cache.' : 'Preparing your local engines. First use downloads the models; later runs use the cache.');
+      if (!voiceReady() && ['idle', 'error'].includes(state)) setState('idle', isDeviceOnly ? 'Choose Download & start conversation above to prepare these models on your device.' : profile === 'hybrid' ? 'Preparing Hybrid. Milo will choose the right model for each reply.' : profile === 'quality' ? 'Preparing the 4B model. First use downloads 2.5 GB; later runs use the cache.' : 'Preparing your local engines. First use downloads the models; later runs use the cache.');
       render();
     } catch (error) { if (visible && token === version) { healthError = error instanceof Error ? error.message : 'Cannot prepare the local engines.'; render(); } }
     finally { preparing = false; }
@@ -412,7 +420,7 @@ export function createConversation(options: {
   const onDeviceChange = () => { if (visible) void refreshDevices(); };
   navigator.mediaDevices?.addEventListener('devicechange', onDeviceChange);
   el('conversation-end').addEventListener('click', end);
-  el('conversation-retry').addEventListener('click', () => void prepare());
+  el('conversation-retry').addEventListener('click', () => { if (isDeviceOnly) { document.getElementById('device-setup')?.scrollIntoView({ block: 'center' }); document.getElementById('device-start')?.focus(); } else void prepare(); });
   el('new-conversation').addEventListener('click', () => {
     end(); messages.length = 0; facts.clear(); summary = ''; summarizedThrough = 0;
     el('conversation-log').replaceChildren(); renderMemory(); setState('idle', 'A fresh conversation. Say hello or type a message.');
@@ -429,6 +437,8 @@ export function createConversation(options: {
   el<HTMLSelectElement>('conversation-voice').value = options.getVoice().voice;
   el('conversation-voice').addEventListener('change', () => options.setVoice(el<HTMLSelectElement>('conversation-voice').value));
   const healthTimer = setInterval(() => void checkHealth(), 2000);
+  const onDeviceHealth = () => { if (isDeviceOnly) void checkHealth(); };
+  if (isDeviceOnly) window.addEventListener('milo-device-change', onDeviceHealth);
   return {
     get label() { return state === 'thinking' && replyRoute?.profile === 'quality' && profile === 'hybrid' ? 'Thinking deeper' : labels[state]; }, get state() { return state; },
     get presenceState(): State { return state === 'listening' && !micLive ? 'idle' : state; },
@@ -440,6 +450,6 @@ export function createConversation(options: {
       else end();
     },
     cancel: end,
-    dispose() { disposed = true; visible = false; stopWork(); gpuRequest?.abort(); clearInterval(healthTimer); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
+    dispose() { disposed = true; visible = false; stopWork(); gpuRequest?.abort(); clearInterval(healthTimer); window.removeEventListener('milo-device-change', onDeviceHealth); navigator.mediaDevices?.removeEventListener('devicechange', onDeviceChange); },
   };
 }

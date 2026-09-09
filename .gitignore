@@ -12,3 +12,5 @@ server/verification/
 coverage/
 .DS_Store
 Thumbs.db
+public/runtime/
+public/models/
