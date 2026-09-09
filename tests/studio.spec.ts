@@ -19,11 +19,12 @@ test('real CPU speech reaches the audio graph, animates, pauses, resumes, ends, 
   await expect(page.locator('#avatar-canvas canvas')).toBeVisible();
   await page.locator('.motion-toggle').click();
   await page.screenshot({ path: testInfo.outputPath('desktop-ready.png'), fullPage: true });
-  const responsePromise = page.waitForResponse(response => response.url().endsWith('/api/speech'), { timeout: 30_000 });
+  // Presets at normal pace play a pre-rendered clip; custom text streams through /api/speech.
+  const responsePromise = page.waitForResponse(response => response.url().endsWith('/api/speech') || response.url().includes('/presets/'), { timeout: 30_000 });
   await page.getByRole('button', { name: 'Let Milo speak' }).click();
   const response = await responsePromise;
   expect(response.status()).toBe(200);
-  expect(response.headers()['content-type']).toContain('audio/wav');
+  expect(response.headers()['content-type']).toMatch(/audio\/(wav|mpeg)/);
   await expect(page.getByRole('button', { name: 'Pause Milo' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).__audioPeak)).toBeGreaterThan(2);
   await page.screenshot({ path: testInfo.outputPath('desktop-speaking.png'), fullPage: true });
@@ -72,6 +73,9 @@ test('custom text, voice and speed persist; blank text stays disabled; mobile re
 test('cancelled generation cannot start late audio and a failed request can be retried', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
+  // Custom text always goes through the voice engine, unlike pre-rendered presets.
+  await page.getByRole('tab', { name: 'Write your own' }).click();
+  await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('Hello there! This sentence checks how a failed request is retried.');
   let attempts = 0;
   await page.route('**/api/speech', async route => {
     attempts++;

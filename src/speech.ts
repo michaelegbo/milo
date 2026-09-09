@@ -3,6 +3,30 @@ import { isDeviceOnly } from './deployment';
 import { encodeWav, resampleAudio } from './microphone';
 export type PlaybackState = 'idle' | 'generating' | 'playing' | 'paused' | 'error';
 
+/** Sentence-sized chunks with a short opening chunk, so playback starts before the rest is generated. */
+export function splitSpeechText(text: string): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const sentences = typeof Intl.Segmenter === 'function'
+    ? Array.from(new Intl.Segmenter('en', { granularity: 'sentence' }).segment(clean), part => part.segment.trim()).filter(Boolean)
+    : clean.split(/(?<=[.!?…]["”’)]*)\s+/).filter(Boolean);
+  const chunks: string[] = [];
+  for (const sentence of sentences) {
+    let rest = sentence;
+    // No single request waits on a paragraph; long sentences break at a space.
+    while (rest.length > 180) { const at = rest.lastIndexOf(' ', 180); const end = at > 0 ? at : 180; chunks.push(rest.slice(0, end).trim()); rest = rest.slice(end).trim(); }
+    if (rest) chunks.push(rest);
+  }
+  // Open with a clause of three to eight words when the first sentence is long,
+  // so the first audio arrives while the remainder is still being generated.
+  const first = chunks[0];
+  if (first) {
+    const clause = /^((?:\S+\s+){2,7}\S+[,;:—–])\s+(\S.*)$/.exec(first);
+    if (clause && clause[1].length < first.length * 0.7) chunks.splice(0, 1, clause[1], clause[2]);
+  }
+  return chunks;
+}
+
 export class SpeechPlayer {
   state: PlaybackState = 'idle';
   error = '';
@@ -28,6 +52,49 @@ export class SpeechPlayer {
   }
 
   get hasAudio() { return !!this.wav; }
+
+  private static waveformOf(samples: Float32Array) {
+    const step = Math.max(1, Math.floor(samples.length / 64));
+    return Array.from({ length: 64 }, (_, i) => {
+      let energy = 0, count = 0;
+      for (let j = i * step; j < Math.min((i + 1) * step, samples.length); j += 12) { energy += samples[j] ** 2; count++; }
+      return Math.max(0.06, Math.min(1, Math.sqrt(energy / Math.max(1, count)) * 6));
+    });
+  }
+
+  /** Take a decoded clip as the current audio, with a WAV copy ready for download. */
+  private adopt(buffer: AudioBuffer) {
+    const samples = buffer.getChannelData(0);
+    this.buffer = buffer; this.duration = buffer.duration;
+    this.wav = encodeWav(resampleAudio(samples, buffer.sampleRate, 24000), 24000);
+    this.waveform = SpeechPlayer.waveformOf(samples);
+  }
+
+  /** Play a pre-rendered clip. Resolves false when it is unavailable so the caller can generate instead. */
+  async speakClip(url: string): Promise<boolean> {
+    this.stop(true);
+    const id = ++this.generation;
+    this.state = 'generating'; this.error = ''; this.onChange();
+    const request = new AbortController();
+    this.request = request;
+    try {
+      await this.initialize();
+      if (id !== this.generation) return true;
+      const response = await fetch(url, { signal: request.signal });
+      if (!response.ok) throw new Error(`Clip unavailable (${response.status}).`);
+      const buffer = await this.context!.decodeAudioData(await response.arrayBuffer());
+      if (id !== this.generation) return true;
+      this.adopt(buffer);
+      this.offset = 0;
+      this.play();
+      return true;
+    } catch {
+      // Stopped, superseded, or missing: never surface an error for an optional clip.
+      return id !== this.generation || request.signal.aborted;
+    } finally {
+      if (id === this.generation) this.request = undefined;
+    }
+  }
   get streaming() { return this.streamOpen; }
 
   /** Resume audio inside a user gesture before a microphone or text turn. */
@@ -120,7 +187,7 @@ export class SpeechPlayer {
   }
 
   /** Play completed sentences while the rest of the response is still arriving. */
-  async speakStream(sentences: AsyncIterable<string>, voice: string, speed: number) {
+  async speakStream(sentences: AsyncIterable<string> | Iterable<string>, voice: string, speed: number) {
     this.stop(true);
     const id = ++this.generation;
     const request = new AbortController();
@@ -138,7 +205,7 @@ export class SpeechPlayer {
         });
         if (!response.ok) {
           const body = await response.json().catch(() => ({}));
-          throw new Error(body.message || 'The next part of the reply could not be spoken.');
+          throw new Error(body.message || 'The next part could not be spoken. Please try again.');
         }
         const chunk = await this.context!.decodeAudioData(await response.arrayBuffer());
         if (id !== this.generation) return;
@@ -170,7 +237,7 @@ export class SpeechPlayer {
       source?.stop(); source?.disconnect();
       this.streamOpen = false;
       this.state = 'error';
-      this.error = request.signal.aborted ? 'That reply took too long. Please try again.' : error instanceof Error ? error.message : 'Milo could not finish the reply.';
+      this.error = request.signal.aborted ? 'That took too long. Try a shorter sentence or try again.' : error instanceof Error ? error.message : 'Milo could not finish speaking.';
       this.onChange();
     } finally {
       clearTimeout(timeout);

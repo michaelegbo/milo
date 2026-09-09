@@ -16,6 +16,32 @@ let ready = false;
 let kind: AudioKind;
 const savedFiles = new Set<string>();
 const audioCache = new Map<string, { wav: ArrayBuffer; duration: number }>();
+// Finished clips also persist in Cache Storage, so a repeated sentence is instant after a reload.
+// Entries are keyed by a hash of text, voice and speed; Delete downloaded models removes them.
+const SPEECH_CACHE = 'milo-speech-v1', SPEECH_CACHE_LIMIT = 120;
+async function speechCacheUrl(key: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+  return `${globalThis.location.origin}/speech-cache/${Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')}`;
+}
+async function readSpeechCache(url: string) {
+  try {
+    if (!('caches' in globalThis)) return undefined;
+    const response = await (await caches.open(SPEECH_CACHE)).match(url);
+    if (!response?.ok) return undefined;
+    const wav = await response.arrayBuffer();
+    if (wav.byteLength <= 44) return undefined;
+    return { wav, duration: (wav.byteLength - 44) / 48000 };
+  } catch { return undefined; }
+}
+async function writeSpeechCache(url: string, wav: ArrayBuffer) {
+  try {
+    if (!('caches' in globalThis)) return;
+    const cache = await caches.open(SPEECH_CACHE);
+    await cache.put(url, new Response(wav.slice(0), { headers: { 'Content-Type': 'audio/wav', 'Content-Length': String(wav.byteLength) } }));
+    const keys = await cache.keys();
+    for (const old of keys.slice(0, Math.max(0, keys.length - SPEECH_CACHE_LIMIT))) await cache.delete(old);
+  } catch { /* Storage pressure or private mode: the clip still plays now. */ }
+}
 let cacheBytes = 0;
 
 // The runtime is shipped by Milo. Models are downloaded only after an explicit
@@ -168,6 +194,9 @@ async function generate(input?: SpeechRequest) {
   const key = JSON.stringify({ text, voice, speed });
   const cached = audioCache.get(key);
   if (cached) return { ...cached, wav: cached.wav.slice(0), generationMs: 0, cached: true };
+  const stored = await speechCacheUrl(key);
+  const saved = await readSpeechCache(stored);
+  if (saved) return { ...saved, wav: saved.wav.slice(0), generationMs: 0, cached: true };
   const start = performance.now();
   const generated: Float32Array[] = [];
   for (const part of splitText(text)) {
@@ -184,6 +213,7 @@ async function generate(input?: SpeechRequest) {
     cacheBytes -= audioCache.get(oldest)!.wav.byteLength; audioCache.delete(oldest);
   }
   if (result.wav.byteLength <= 16 * 1024 * 1024) { audioCache.set(key, result); cacheBytes += result.wav.byteLength; }
+  await writeSpeechCache(stored, result.wav);
   return { ...result, wav: result.wav.slice(0), generationMs: Math.round(performance.now() - start), cached: false };
 }
 

@@ -66,6 +66,8 @@ export async function clearStoredModels() {
       if (!cacheLock) throw new Error('Another Milo tab is downloading a model. Close it, then try again.');
       const files = await entries();
       for (const file of files) await file.remove();
+      // Generated speech clips are derived from typed text; remove them with the models.
+      if ('caches' in globalThis) await caches.delete('milo-speech-v1');
       if ((await entries()).length) throw new Error('Some model files are still present. Close other Milo tabs and try again.');
       return files.length;
     });

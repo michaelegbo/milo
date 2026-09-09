@@ -12,7 +12,7 @@ Milo is an expressive Three.js robot that speaks your sentences and has voice or
 
 1. Open the website in a recent desktop browser. The avatar appears before any model download.
 2. Choose **Download voice** to enable the sentence studio, or the conversation download option for voice and replies. Milo explains the download size before starting.
-3. Pick a preset or type a sentence, choose Michael, Heart or Emma, and let Milo speak. Use pause, resume, stop or download the generated WAV.
+3. Pick a preset or type a sentence, choose Michael, Heart or Emma, and let Milo speak. The three presets are pre-rendered Kokoro clips that play instantly at normal pace; custom text and other paces are generated on your device sentence by sentence, so speech starts before the whole text is finished. Use pause, resume, stop or download the generated WAV.
 4. Open **Conversation** and type a message. If Milo is not ready, the panel names the one thing needed next, such as loading saved models, downloading missing files, signing in to ChatGPT or retrying after an error, and offers that action in place. Microphone permission is requested only when you choose to listen or enable microphone selection.
 5. Select Fast, Better answers or Hybrid. Prepare the corresponding model when prompted.
 6. If the browser detects a compatible GPU, replies use it automatically and the switch shows **On**. Turn it off to reload the selected model on the device CPU; that choice is remembered in this browser. Unload the engines to release their live contexts.
@@ -98,7 +98,7 @@ ChatGPT connections use an HttpOnly, Secure, SameSite=Strict cookie. Each connec
 
 The website and model downloads still contact the hosting/CDN infrastructure, which can see ordinary request metadata such as IP addresses and requested file paths. That is distinct from uploading conversation contents. No analytics or account registration is required by Milo.
 
-Recording starts only after an explicit microphone action and permission. Stop/end controls release microphone activity. Preferences can persist locally; conversational context belongs to the current tab. Downloaded models use browser storage; generated audio has a bounded in-memory cache. Unloading releases model contexts while preserving downloaded files.
+Recording starts only after an explicit microphone action and permission. Stop/end controls release microphone activity. Preferences can persist locally; conversational context belongs to the current tab. Downloaded models use browser storage; generated audio is cached in this browser so repeated sentences replay instantly, and **Delete downloaded models** removes those clips too. Unloading releases model contexts while preserving downloaded files.
 
 Cached models support repeated inference without new model downloads. The website itself is not an installable offline PWA: reloading without network access is not guaranteed. Export a WAV when you want to keep a generated clip.
 

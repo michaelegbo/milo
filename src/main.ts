@@ -3,7 +3,8 @@ import { isDeviceOnly, MILO_REPOSITORY } from './deployment';
 import { createDevicePanel } from './device/panel';
 import './style.css';
 import { createAvatar, type AvatarPresence } from './avatar';
-import { SpeechPlayer } from './speech';
+import { SpeechPlayer, splitSpeechText } from './speech';
+import { presets, presetClipPath } from './presets';
 import { createConversation } from './conversation';
 import { inferUtteranceMood } from './utterance-mood';
 
@@ -24,11 +25,6 @@ const paths: Record<string, string> = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-11v1"/>',
 };
 const icon = (name: string, className = '') => `<svg class="icon ${className}" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] ?? paths.spark}</svg>`;
-const presets = [
-  { title: 'A little introduction', category: 'SAY HELLO', icon: 'hand', text: "Hey there! I'm Milo, your little digital companion. Pick a sentence, and let's bring it to life." },
-  { title: 'You’ve got this', category: 'A LITTLE ENCOURAGEMENT', icon: 'spark', text: "Big things start with small steps. You don't have to have it all figured out. Just keep creating. You've got this!" },
-  { title: 'A moment to slow down', category: 'TAKE A BREATHER', icon: 'leaf', text: "Let's take a little break. Relax your shoulders, take a deep breath, and give yourself a moment. There's no rush." },
-];
 const defaults = { selected: 0, mode: 'presets', custom: '', voice: 'am_michael', speed: 1, gestures: !matchMedia('(prefers-reduced-motion: reduce)').matches, motion: !matchMedia('(prefers-reduced-motion: reduce)').matches };
 let saved: Partial<typeof defaults> = {};
 try { saved = JSON.parse(localStorage.getItem('milo-studio-v1') || '{}') ?? {}; } catch { /* Defaults also work when storage is disabled. */ }
@@ -226,8 +222,14 @@ el('speak').addEventListener('click', () => {
   activeText = currentText();
   deliveryMood = inferUtteranceMood(activeText);
   activeTitle = settings.mode === 'presets' ? presets[settings.selected].title : 'A few words of your own';
-  void player.speak(activeText, settings.voice, settings.speed);
+  void speakStudio();
 });
+/** Presets at normal pace play a pre-rendered clip instantly; everything else streams from the voice engine sentence by sentence. */
+async function speakStudio() {
+  const { voice, speed, mode, selected } = settings;
+  if (mode === 'presets' && speed === 1 && await player.speakClip(presetClipPath(selected, voice))) return;
+  await player.speakStream(splitSpeechText(activeText), voice, speed);
+}
 el('stop').addEventListener('click', () => player.stop());
 el('download').addEventListener('click', () => player.download());
 el('reset-view').addEventListener('click', () => avatar?.reset());
