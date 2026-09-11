@@ -1,8 +1,8 @@
 # Hosting the browser edition with Dokploy
 
 The public deployment serves static files through Nginx. Three.js rendering,
-Kokoro speech, Whisper transcription, and Qwen replies run on the visitor's device
-in browser workers by default. A separate hosted Codex service supports optional
+Whisper transcription, and Qwen replies run on the visitor's device in browser
+workers by default. Milo's voice is Deepgram Flux through the `voice` proxy. A separate hosted Codex service supports optional
 ChatGPT account connections. Only `/api/codex/` is proxied; other `/api/` routes
 return `404`. Audio is never uploaded.
 
@@ -32,9 +32,10 @@ own origin and the content security policy stays `connect-src 'self'`.
 
 Set `DEEPGRAM_API_KEY` in the Dokploy environment for the Compose service. The key
 is read by the `voice` container only; it is never written to the image, the
-repository or the browser. Without it the service reports `unconfigured`, and
-Milo speaks with the on-device Kokoro voice instead, so a missing or revoked key
-degrades to the previous behaviour rather than breaking speech. Rotate the key in
+repository or the browser. Deepgram is the website's only voice. Without the key
+the service reports `unconfigured` and Milo does not speak: the studio and the
+conversation say the Deepgram voice is unavailable, and nothing else speaks in its
+place. The pre-recorded preset clips, which are Deepgram audio, still play. Rotate the key in
 the Deepgram console whenever it may have been exposed, then redeploy.
 
 The proxy accepts only `POST /api/voice/speak` with up to 600 characters of text

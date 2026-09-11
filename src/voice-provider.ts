@@ -3,8 +3,9 @@ import { isDeviceOnly } from './deployment';
 /**
  * The hosted voice is Deepgram Flux behind Milo's own origin. The browser
  * only ever talks to /api/voice/, so the API key stays on the server and the
- * content security policy is unchanged. When the proxy is missing, not
- * configured or failing, speech falls back to the on-device Kokoro voice.
+ * content security policy is unchanged. In the browser edition Deepgram is
+ * Milo's only voice: when the proxy is missing, not configured or failing,
+ * Milo does not speak and says so. There is no on-device or browser fallback.
  */
 export type HostedVoiceStatus = 'unknown' | 'ready' | 'unavailable';
 export const PCM_TYPE = 'audio/pcm';
@@ -13,10 +14,12 @@ export const DEVICE_VOICE_LABELS: Record<string, string> = { am_michael: 'Michae
 
 let status: HostedVoiceStatus = isDeviceOnly ? 'unknown' : 'unavailable';
 let checkedAt = 0, checking: Promise<HostedVoiceStatus> | undefined;
-const RECHECK_MS = 30_000;
+const RECHECK_MS = 30_000, RETRY_MS = 10_000;
+export const DEEPGRAM_UNAVAILABLE = 'Milo’s Deepgram voice is not available right now, so Milo cannot speak. It comes back on its own as soon as Deepgram answers again.';
 
 export const hostedVoiceStatus = () => status;
-export const usesHostedVoice = () => status === 'ready';
+/** The browser edition always speaks with Deepgram; hostedVoiceStatus() says whether it is reachable. */
+export const usesHostedVoice = () => isDeviceOnly;
 export const voiceLabel = (id: string) => (usesHostedVoice() ? HOSTED_VOICE_LABELS : DEVICE_VOICE_LABELS)[id] ?? id;
 
 function update(next: HostedVoiceStatus) {
@@ -31,7 +34,7 @@ function update(next: HostedVoiceStatus) {
 export function checkHostedVoice(force = false): Promise<HostedVoiceStatus> {
   if (!isDeviceOnly) return Promise.resolve('unavailable');
   if (checking) return checking;
-  if (!force && status !== 'unknown' && Date.now() - checkedAt < RECHECK_MS) return Promise.resolve(status);
+  if (!force && status !== 'unknown' && Date.now() - checkedAt < (status === 'ready' ? RECHECK_MS : RETRY_MS)) return Promise.resolve(status);
   checking = fetch('/api/voice/health', { credentials: 'omit', signal: AbortSignal.timeout(6000) })
     .then(async response => { const body = response.ok ? await response.json() : {}; update(body?.status === 'ready' ? 'ready' : 'unavailable'); })
     .catch(() => update('unavailable'))
@@ -40,7 +43,7 @@ export function checkHostedVoice(force = false): Promise<HostedVoiceStatus> {
   return checking;
 }
 
-/** Stream one sentence from the hosted voice. Throws so the caller can fall back. */
+/** Stream one sentence from the hosted voice. Throws with a message to show; nothing else speaks instead. */
 export async function hostedSpeak(body: { text: string; voice?: string }, signal?: AbortSignal): Promise<Response> {
   let response: Response;
   try {

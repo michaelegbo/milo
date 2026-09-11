@@ -6,9 +6,13 @@ import { readFile } from 'node:fs/promises';
 test.use({ baseURL: process.env.MILO_DEVICE_TEST_URL || 'http://127.0.0.1:5175' });
 test.skip(!process.env.MILO_DEVICE_TEST_URL, 'Set MILO_DEVICE_TEST_URL for the separate device-only UI suite.');
 
-async function setup(page: Page, unsupported = false, hostedVoice: 'unconfigured' | 'ready' = 'unconfigured') {
-  const requests: string[] = [], errors: string[] = [];
+async function setup(page: Page, unsupported = false, hostedVoice: 'unconfigured' | 'ready' = 'ready') {
+  const requests: string[] = [], errors: string[] = [], spoken: string[] = [];
   await page.route('**/api/voice/health', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: hostedVoice, provider: 'deepgram', voices: ['am_michael', 'af_heart', 'bf_emma'] }) }));
+  // Deepgram is Milo's only voice: every sentence Milo says arrives here as 24 kHz PCM.
+  const pcm = Buffer.alloc(12000 * 2);
+  for (let i = 0; i < 12000; i++) pcm.writeInt16LE(Math.round(Math.sin(i / 8) * 8000), i * 2);
+  await page.route('**/api/voice/speak', route => { spoken.push(route.request().postDataJSON().text); return route.fulfill({ status: 200, contentType: 'audio/pcm;codec=s16le;rate=24000', body: pcm }); });
   page.on('request', request => requests.push(request.url()));
   page.on('pageerror', error => errors.push(error.message));
   const source = await readFile(new URL('./fixtures/microphone.wav', import.meta.url));
@@ -44,7 +48,7 @@ async function setup(page: Page, unsupported = false, hostedVoice: 'unconfigured
         const kinds = kind === 'both' ? ['tts', 'stt'] : [kind];
         for (const key of kinds) Object.assign((health as any)[key], { status: 'loading', progress: 35 });
         await gate('Initialize', signal); signal?.throwIfAborted();
-        if (state.initializeError) { Object.assign(health.tts, { status: 'error', message: state.initializeError }); throw new Error(state.initializeError); }
+        if (state.initializeError) { for (const key of kinds) Object.assign((health as any)[key], { status: 'error', message: state.initializeError }); throw new Error(state.initializeError); }
         for (const key of kinds) Object.assign((health as any)[key], { status: 'ready', progress: 100 });
       },
       generate: async ({ text }: { text: string }, { signal }: { signal?: AbortSignal } = {}) => {
@@ -94,7 +98,7 @@ async function setup(page: Page, unsupported = false, hostedVoice: 'unconfigured
   });
   await page.goto('/');
   await expect(page.locator('#device-setup')).toBeVisible();
-  return { requests, errors };
+  return { requests, errors, spoken };
 }
 
 function expectPrivate(requests: string[]) {
@@ -103,26 +107,31 @@ function expectPrivate(requests: string[]) {
   expect(requests.filter(url => new URL(url).port === '8790')).toEqual([]);
 }
 
-test('presets play before models load while custom speech still requires setup', async ({ page }) => {
-  const { errors } = await setup(page);
+test('presets play Deepgram clips instantly and custom sentences stream from Deepgram without any download', async ({ page }) => {
+  const { errors, spoken } = await setup(page);
   await expect(page.locator('#speak')).toBeEnabled();
   await page.getByRole('button', { name: 'Let Milo speak', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Pause Milo', exact: true })).toBeVisible();
+  // Presets are recorded Deepgram clips shipped with the site: nothing loads and nothing is generated.
   expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
-  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
+  expect(spoken).toEqual([]);
   await page.getByRole('button', { name: 'Stop speech', exact: true }).click();
-  await page.getByRole('slider', { name: 'Speech pace' }).fill('0.8');
-  await expect(page.locator('#speak')).toBeDisabled();
-  await page.getByRole('slider', { name: 'Speech pace' }).fill('1');
-  await expect(page.locator('#speak')).toBeEnabled();
+  await expect(page.getByRole('slider', { name: 'Speech pace' })).toBeDisabled();
+  // A missing recording is spoken live by Deepgram, never by any other voice.
   await page.route('**/presets/*.mp3', route => route.fulfill({ status: 404 }));
   await page.locator('#speak').click();
-  await expect(page.locator('#speech-status')).toContainText('This audio clip could not load');
+  await expect(page.locator('#speech-status')).toContainText('That’s a wrap');
+  const presetParts = spoken.length; expect(presetParts).toBeGreaterThan(0);
   await expect(page.locator('#speak')).toBeEnabled();
-  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
   await page.getByRole('tab', { name: 'Write your own' }).click();
   await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('A custom sentence.');
-  await expect(page.locator('#speak')).toBeDisabled();
+  await expect(page.locator('#speak')).toBeEnabled();
+  await page.locator('#speak').click();
+  await expect.poll(() => spoken.length).toBe(presetParts + 1);
+  await expect(page.locator('#speech-status')).toContainText('That’s a wrap');
+  expect(spoken.at(-1)).toBe('A custom sentence.');
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
   expect(errors).toEqual([]);
 });
 
@@ -161,19 +170,19 @@ async function mockHostedChatGPT(page: Page, signedIn = true) {
 }
 
 test('ChatGPT is opt-in, selects account models, prepares local audio and preserves context', async ({ page }, testInfo) => {
-  const { errors, requests } = await setup(page);
+  const { errors, requests, spoken } = await setup(page);
   const hosted = await mockHostedChatGPT(page);
   await page.getByRole('tab', { name: 'Conversation' }).click();
   expect(hosted.requests).toEqual([]);
   await page.getByLabel('REPLY PROVIDER').selectOption('codex');
-  await expect(page.locator('.device-privacy')).toContainText('go to OpenAI through Milo');
-  await expect(page.locator('#device-download-size')).toContainText('172 MB');
+  await expect(page.locator('.device-privacy')).toContainText('go to OpenAI for replies');
+  await expect(page.locator('#device-download-size')).toContainText('80 MB');
   await expect(page.locator('#codex-status')).toContainText('ChatGPT connected');
   await page.getByLabel('CHATGPT MODEL', { exact: true }).selectOption('second-model');
   await expect(page.getByLabel('CHATGPT MODEL', { exact: true })).toHaveValue('second-model');
   await page.getByRole('button', { name: /Download & start conversation/ }).click();
   await expect(page.locator('#conversation-start')).toBeEnabled();
-  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both']);
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:stt']);
   await send(page, 'My name is Amara.');
   await page.getByLabel('MILO’S MIND').selectOption('hybrid');
   await send(page, 'What is my name?');
@@ -181,7 +190,8 @@ test('ChatGPT is opt-in, selects account models, prepares local audio and preser
   expect(turns[1].body.model).toBe('second-model');
   expect(turns[1].body.memory.facts.join(' ')).toContain('Amara');
   expect(await page.evaluate(() => (window as any).__device.turns)).toEqual([]);
-  expect(await page.evaluate(() => (window as any).__device.speech)).toContain('Hello from your ChatGPT account.');
+  expect(spoken).toContain('Hello from your ChatGPT account.');
+  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('chatgpt-mobile.png'), fullPage: true });
@@ -237,13 +247,15 @@ test('ChatGPT device sign-in supports new codes, cancellation, failures and priv
   expect(errors).toEqual([]);
 });
 
-test('device landing requests no models or API before consent and plays local speech at desktop and mobile sizes', async ({ page }, testInfo) => {
-  const { requests, errors } = await setup(page);
+test('device landing requests no models before consent and speaks only with Deepgram at desktop and mobile sizes', async ({ page }, testInfo) => {
+  const { requests, errors, spoken } = await setup(page);
   await expect(page.locator('.device-privacy')).toContainText('stay in this browser');
-  // Presets are pre-rendered clips, so they play before any model download; the engine itself stays unloaded.
+  // Presets are pre-recorded Deepgram clips, so they play at once; nothing loads on the device for the studio.
   await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
   await expect(page.locator('#speech-status')).toContainText('No voice model download needed');
-  await expect(page.locator('#engine-label')).toContainText('Not loaded');
+  await expect(page.locator('#engine-label')).toHaveText('Deepgram voice · Ready');
+  await expect(page.locator('#device-start')).toHaveText('Deepgram voice ready ✓');
+  await expect(page.locator('#device-start')).toBeDisabled();
   await expect(page.getByRole('link', { name: 'View source' })).toHaveAttribute('href', 'https://github.com/michaelegbo/milo');
   await page.waitForTimeout(800);
   expect(requests.filter(url => /audio-client|chat-client|\.gguf|\.onnx|\.wasm/.test(url))).toEqual([]);
@@ -254,14 +266,14 @@ test('device landing requests no models or API before consent and plays local sp
   await page.getByRole('tab', { name: 'Setup', exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath('device-mobile-consent.png'), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1024 });
-  await page.getByRole('button', { name: /Download & start voice/ }).click();
-  await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
-  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:tts']);
+  await page.getByRole('tab', { name: 'Write your own' }).click();
+  await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('Hello from Deepgram.');
   await page.getByRole('button', { name: 'Let Milo speak' }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__device.starts)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as any).__device.starts)).toBeGreaterThan(0);
   await expect(page.locator('#speech-status')).toContainText('That’s a wrap');
-  await page.getByRole('button', { name: 'Free up memory' }).click();
-  await expect(page.locator('#engine-label')).toContainText('Not loaded');
+  expect(spoken).toEqual(['Hello from Deepgram.']);
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
+  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
   expect(await page.evaluate(() => (window as any).__device.micCalls)).toBe(0);
   expectPrivate(requests); expect(errors).toEqual([]);
 });
@@ -272,9 +284,9 @@ test('each conversation profile requires consent, retains memory and streams Hyb
   await expect(page.getByRole('switch', { name: 'GPU acceleration' })).toBeHidden();
   await send(page, 'My name is Amara.');
   // Better answers is the default; choosing another model prepares it without a further click.
-  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:quality']);
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:stt', 'chat:quality']);
   await page.getByLabel('MILO’S MIND').selectOption('hybrid');
-  await expect(page.locator('#device-download-size')).toContainText('up to 3.8 GB');
+  await expect(page.locator('#device-download-size')).toContainText('up to 3.7 GB');
   await expect(page.locator('#conversation-start')).toBeEnabled();
   expect(await page.evaluate(() => (window as any).__device.initialize)).toContain('chat:hybrid');
   await send(page, 'Explain why leaves are green.');
@@ -309,28 +321,30 @@ test('an unsupported browser fails closed with a useful explanation and no model
 
 test('download cancellation releases engines, errors remain local and explicit retry recovers', async ({ page }) => {
   const { requests, errors } = await setup(page);
+  await page.getByRole('tab', { name: 'Conversation' }).click();
   await page.evaluate(() => { (window as any).__device.holdInitialize = true; });
-  await page.getByRole('button', { name: /Download & start voice/ }).click();
-  await expect(page.getByRole('button', { name: 'Cancel download' })).toBeVisible();
-  await expect(page.locator('#device-progress')).toBeVisible();
-  await page.getByRole('button', { name: 'Cancel download' }).click();
+  await page.locator('#device-start').click();
+  const loading = page.locator('#conversation-loading');
+  await expect(loading).toBeVisible();
+  await loading.locator('#conversation-loading-cancel').click();
+  await expect(loading).toBeHidden();
   await expect(page.locator('#device-status')).toContainText('Models stopped');
   await expect(page.locator('#device-start')).toBeEnabled();
   await page.evaluate(() => { const state = (window as any).__device; state.holdInitialize = false; state.initializeError = 'Not enough memory on this device. Close other tabs and try again.'; });
   await page.locator('#device-start').click();
   await expect(page.locator('#device-status')).toContainText('Not enough memory');
-  await expect(page.getByRole('button', { name: 'Try loading again' })).toBeEnabled();
+  await expect(page.locator('#device-start')).toHaveText(/Try loading again/);
   await page.evaluate(() => { (window as any).__device.initializeError = ''; });
-  await page.getByRole('button', { name: 'Try loading again' }).click();
-  await expect(page.getByRole('button', { name: 'Let Milo speak' })).toBeEnabled();
+  await page.locator('#device-start').click();
+  await expect(page.locator('#conversation-start')).toBeEnabled();
   expectPrivate(requests); expect(errors).toEqual([]);
 });
 
 test('unloading during a pending reply cancels stale text and audio while preserving this tab’s history', async ({ page }) => {
-  const { requests, errors } = await setup(page);
+  const { requests, errors, spoken } = await setup(page);
   await enableConversation(page);
   await send(page, 'My name is Amara.');
-  const previousSpeech = await page.evaluate(() => (window as any).__device.speech.length);
+  const previousSpeech = spoken.length;
   await page.evaluate(() => { const state = (window as any).__device; state.holdReply = true; state.replyText = 'This late reply must never appear.'; });
   await page.getByRole('textbox', { name: 'Message Milo' }).fill('Tell me a story.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -340,7 +354,7 @@ test('unloading during a pending reply cancels stale text and audio while preser
   await expect(page.locator('#conversation-panel')).toHaveAttribute('data-state', 'idle');
   await expect(page.locator('.conversation-message.assistant')).toHaveCount(1);
   await expect(page.locator('.conversation-message.user').first()).toContainText('Amara');
-  expect(await page.evaluate(() => (window as any).__device.speech.length)).toBe(previousSpeech);
+  expect(spoken.length).toBe(previousSpeech);
   expectPrivate(requests); expect(errors).toEqual([]);
 });
 
@@ -403,16 +417,18 @@ test('deleting downloads confirms, clears actual model storage and preserves cha
 
 test('deletion stops an in-progress preparation and permits an explicit restart', async ({ page }) => {
   await setup(page); await seedModelStorage(page);
+  await page.getByRole('tab', { name: 'Conversation' }).click();
   await page.evaluate(() => { (window as any).__device.holdInitialize = true; });
-  await page.getByRole('button', { name: /Download & start voice/ }).click();
+  await page.locator('#device-start').click();
   await expect.poll(() => page.evaluate(() => (window as any).__device.initialize.length)).toBe(1);
-  await page.getByRole('button', { name: 'Delete downloaded models', exact: true }).click();
+  // The loading dialog is modal; deletion must still stop the preparation however it is reached.
+  await page.locator('#device-delete').dispatchEvent('click');
   await page.getByRole('button', { name: 'Delete models', exact: true }).click();
   await expect(page.locator('#device-status')).toContainText('Downloaded models deleted');
   await page.evaluate(() => { const state = (window as any).__device; state.holdInitialize = false; state.releaseInitialize?.(); });
-  await expect(page.locator('#engine-label')).toContainText('Not loaded');
-  await page.getByRole('button', { name: /Download & start voice/ }).click();
-  await expect(page.locator('#engine-label')).toContainText('ready');
+  await expect(page.locator('#conversation-start')).toBeDisabled();
+  await page.locator('#device-start').click();
+  await expect(page.locator('#conversation-start')).toBeEnabled();
 });
 
 test('another tab protects shared model storage until its engines are released', async ({ page, context }) => {
@@ -451,7 +467,7 @@ test('partial deletion reports failure and can retry without claiming storage wa
 });
 
 test('browser GPU can return to CPU while warming or answering without losing Hybrid memory or using an API', async ({ page }, testInfo) => {
-  const { requests, errors } = await setup(page);
+  const { requests, errors, spoken } = await setup(page);
   await page.evaluate(() => { (window as any).__device.gpuAvailable = true; });
   await page.getByRole('tab', { name: 'Conversation' }).click();
   await page.getByLabel('MILO’S MIND').selectOption('hybrid'); // prepares on its own
@@ -478,7 +494,7 @@ test('browser GPU can return to CPU while warming or answering without losing Hy
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('device-mobile-gpu.png'), fullPage: true });
   await page.setViewportSize({ width: 1440, height: 1024 });
-  const previousSpeech = await page.evaluate(() => (window as any).__device.speech.length);
+  const previousSpeech = spoken.length;
   await page.evaluate(() => { const state = (window as any).__device; state.holdReply = true; state.replyText = 'This GPU reply was cancelled.'; });
   await page.getByRole('textbox', { name: 'Message Milo' }).fill('Explain why leaves are green.');
   await page.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -487,7 +503,7 @@ test('browser GPU can return to CPU while warming or answering without losing Hy
   await expect(page.locator('#gpu-status')).toContainText('CPU');
   await page.evaluate(() => { (window as any).__device.releaseReply?.(); });
   await expect(page.locator('.conversation-message.assistant')).toHaveCount(1);
-  expect(await page.evaluate(() => (window as any).__device.speech.length)).toBe(previousSpeech);
+  expect(spoken.length).toBe(previousSpeech);
   await expect(page.locator('#conversation-model')).toHaveValue('hybrid');
   await expect(page.locator('#memory-detail')).toContainText('Amara');
   expect(await page.evaluate(() => (window as any).__device.switches)).toEqual([true, false, true, false]);
@@ -498,14 +514,15 @@ test('the real unloaded device page displays consent before any model request at
   const requests: string[] = [], errors: string[] = [];
   page.on('request', request => requests.push(request.url()));
   page.on('pageerror', error => errors.push(error.message));
-  // No fake workers, fake inference, or capability overrides in this test. The hosted voice is pinned to
-  // unconfigured so the result does not depend on whether a Deepgram proxy happens to be running.
+  // No fake workers, fake inference, or capability overrides in this test. Deepgram is pinned to
+  // unconfigured, which also shows that nothing else steps in as Milo's voice.
   await page.route('**/api/voice/health', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'unconfigured' }) }));
   await page.goto('/');
   await expect(page.locator('body')).toHaveAttribute('data-deployment', 'device');
-  await expect(page.locator('#device-start')).toBeEnabled();
+  await expect(page.locator('#device-start')).toHaveText(/Check Deepgram voice again/);
+  await expect(page.locator('#device-status')).toContainText('Deepgram voice is not available');
   await expect(page.locator('#speech-status')).toContainText('No voice model download needed');
-  await expect(page.locator('#engine-label')).toContainText('Not loaded');
+  await expect(page.locator('#engine-label')).toHaveText('Deepgram voice · Unavailable');
   await expect(page.locator('#avatar-canvas canvas')).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath('milo-device-desktop-real.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
@@ -521,7 +538,7 @@ test('the real unloaded device page displays consent before any model request at
   expectPrivate(requests); expect(errors).toEqual([]);
 });
 
-test('the hosted voice speaks without any download, streams PCM, and explains itself when the proxy fails', async ({ page }) => {
+test('the Deepgram voice speaks without any download, streams PCM, and explains itself when the proxy fails', async ({ page }) => {
   const { requests, errors } = await setup(page, false, 'ready');
   // 24 kHz mono PCM with a constant tone, delivered in several chunks like the real proxy.
   const samples = 24000; const pcm = Buffer.alloc(samples * 2);
@@ -548,7 +565,8 @@ test('the hosted voice speaks without any download, streams PCM, and explains it
   await page.unroute('**/api/voice/speak');
   await page.route('**/api/voice/speak', route => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ message: 'The hosted voice did not respond.' }) }));
   await page.getByRole('button', { name: 'Let Milo speak' }).click();
-  await expect(page.locator('#speech-status')).toContainText('load the on-device voice');
+  await expect(page.locator('#speech-status')).toContainText('Deepgram voice is not available');
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual([]);
   expectPrivate(requests); expect(errors).toEqual([]);
 });
 
@@ -588,7 +606,7 @@ test('an iPhone starts on ChatGPT with a connect dialog, and on-device replies o
   await expect(mind).toHaveValue('fast');
   // Choosing Fast is the go-ahead, so it prepares on its own.
   await expect(page.locator('#conversation-start')).toBeEnabled();
-  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:both', 'chat:fast']);
+  expect(await page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:stt', 'chat:fast']);
   // The phone shell: one screen, a tab bar, and no page scroll in either direction.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('tab', { name: 'Talk', exact: true })).toBeVisible();
@@ -596,4 +614,30 @@ test('an iPhone starts on ChatGPT with a connect dialog, and on-device replies o
   // ChatGPT sign-in calls are the point here; inference routes still never leave the device.
   expect(requests.filter(url => new URL(url).pathname.startsWith('/api/') && !/^\/api\/(voice|codex)\//.test(new URL(url).pathname))).toEqual([]);
   expect(errors).toEqual([]);
+});
+
+test('without Deepgram Milo stays silent and says so, and no other voice ever loads', async ({ page }) => {
+  const { requests, errors, spoken } = await setup(page, false, 'unconfigured');
+  await expect(page.locator('#engine-label')).toHaveText('Deepgram voice · Unavailable');
+  await expect(page.locator('#device-status')).toContainText('Deepgram voice is not available');
+  await expect(page.locator('#device-start')).toHaveText(/Check Deepgram voice again/);
+  await page.getByRole('tab', { name: 'Write your own' }).click();
+  await page.getByRole('textbox', { name: 'Your words, Milo’s voice.' }).fill('Nobody else may say this.');
+  await expect(page.locator('#speak')).toBeDisabled();
+  await expect(page.locator('#speech-status')).toContainText('Deepgram voice is not available');
+  // Conversation still prepares listening and replies, but will not talk without Deepgram.
+  await page.getByRole('tab', { name: 'Conversation' }).click();
+  await expect(page.locator('#conversation-next-text')).toContainText('Deepgram voice is not available');
+  await page.locator('#device-start').click();
+  await expect.poll(() => page.evaluate(() => (window as any).__device.initialize)).toEqual(['audio:stt', 'chat:quality']);
+  await expect(page.locator('#conversation-start')).toBeDisabled();
+  // Deepgram comes back: Check again restores the voice, and it is still the only one.
+  await page.unroute('**/api/voice/health');
+  await page.route('**/api/voice/health', route => route.fulfill({ json: { status: 'ready' } }));
+  await page.getByRole('button', { name: 'Check again', exact: true }).click();
+  await expect(page.locator('#conversation-start')).toBeEnabled();
+  await send(page, 'Hello there.');
+  expect(spoken).toEqual(['Hello, lovely to meet you.']);
+  expect(await page.evaluate(() => (window as any).__device.speech)).toEqual([]);
+  expectPrivate(requests); expect(errors).toEqual([]);
 });

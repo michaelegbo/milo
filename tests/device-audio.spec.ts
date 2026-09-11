@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { transformWithOxc } from 'vite';
 
+// The device audio client only listens (Whisper). Milo's voice is Deepgram, so there is no speech engine here.
 async function setup(page: Page) {
   const source = await readFile(new URL('../src/device/audio-client.ts', import.meta.url), 'utf8');
   const compiled = (await transformWithOxc(source, 'audio-client.ts', { target: 'es2022' })).code;
@@ -21,7 +22,7 @@ async function setup(page: Page) {
       emit(data: unknown) { this.onmessage?.({ data }); }
       postMessage(message: any) {
         this.calls.push(message);
-        if (message.type === 'generate' && state.hold) return;
+        if (message.type === 'transcribe' && state.hold) return;
         queueMicrotask(() => {
           if (message.type === 'initialize') {
             if (state.failInit) {
@@ -31,7 +32,7 @@ async function setup(page: Page) {
             this.emit({ health: { status: 'loading', progress: 50 } });
             this.emit({ health: { status: 'ready', progress: 100, offline: true } });
             this.emit({ id: message.id, result: true });
-          } else if (message.type === 'generate') this.emit({ id: message.id, result: { wav: new ArrayBuffer(48), duration: 1, generationMs: 10, cached: false } });
+          } else if (message.type === 'transcribe') this.emit({ id: message.id, result: { text: 'Hello from my device.', duration: 1, transcriptionMs: 10 } });
         });
       }
       terminate() { this.terminated = true; }
@@ -40,7 +41,7 @@ async function setup(page: Page) {
   });
 }
 
-test('device audio is lazy, validates before download, and returns local WAV metadata', async ({ page }) => {
+test('device listening is lazy, validates before download, and has no speech engine', async ({ page }) => {
   await setup(page);
   const requests: string[] = [];
   page.on('request', request => requests.push(request.url()));
@@ -48,58 +49,61 @@ test('device audio is lazy, validates before download, and returns local WAV met
     const source = '/src/device/audio-client.ts';
     const { DeviceAudioClient } = await import(source);
     const client = new DeviceAudioClient();
-    const before = (window as any).__audioTest.workers.length;
+    const workers = (window as any).__audioTest.workers;
+    const before = workers.length;
     let invalid = false;
-    try { await client.generate({ text: '' }); } catch { invalid = true; }
-    const afterInvalid = (window as any).__audioTest.workers.length;
-    const generated = await client.generate({ text: 'Hello.' });
+    try { await client.transcribe(new ArrayBuffer(1_000_001)); } catch { invalid = true; }
+    const afterInvalid = workers.length;
+    const heard = await client.transcribe(new ArrayBuffer(48));
     const health = client.health();
+    const names = workers.map((worker: any) => worker.options.name);
+    const speaks = typeof (client as any).generate;
     client.dispose();
-    return { before, invalid, afterInvalid, bytes: generated.wav.size, type: generated.wav.type, duration: generated.duration, health };
+    return { before, invalid, afterInvalid, heard, health, names, speaks };
   });
   expect(result.before).toBe(0);
   expect(result.invalid).toBe(true);
   expect(result.afterInvalid).toBe(0);
-  expect(result.bytes).toBe(48);
-  expect(result.type).toBe('audio/wav');
-  expect(result.health.tts.status).toBe('ready');
-  expect(result.health.stt.status).toBe('unloaded');
+  expect(result.heard.text).toBe('Hello from my device.');
+  expect(Object.keys(result.health)).toEqual(['stt']);
+  expect(result.health.stt.status).toBe('ready');
+  expect(result.names).toEqual(['milo-stt']);
+  expect(result.speaks).toBe('undefined');
   expect(requests.some(url => url.includes('/api/'))).toBe(false);
 });
 
-test('cancelling voice terminates only its worker and ignores stale completion', async ({ page }) => {
+test('cancelling listening terminates its worker and ignores stale completion', async ({ page }) => {
   await setup(page);
   const result = await page.evaluate(async () => {
     const source = '/src/device/audio-client.ts';
     const { DeviceAudioClient } = await import(source);
     const client = new DeviceAudioClient();
-    await client.initialize('both');
+    await client.initialize();
     const testState = (window as any).__audioTest;
     testState.hold = true;
     const abort = new AbortController();
-    const pending = client.generate({ text: 'This will stop.' }, { signal: abort.signal }).then(() => 'unexpected', (error: Error) => error.name);
-    while (!testState.workers[0].calls.some((call: any) => call.type === 'generate')) await new Promise(resolve => setTimeout(resolve, 0));
+    const pending = client.transcribe(new ArrayBuffer(48), { signal: abort.signal }).then(() => 'unexpected', (error: Error) => error.name);
+    while (!testState.workers[0].calls.some((call: any) => call.type === 'transcribe')) await new Promise(resolve => setTimeout(resolve, 0));
     const old = testState.workers[0];
     const oldId = old.calls.at(-1).id;
     abort.abort();
     const cancellation = await pending;
     const stopped = client.health();
     testState.hold = false;
-    await client.initialize('tts');
+    await client.initialize();
     old.emit({ health: { status: 'error', message: 'A stale worker must not replace current health.' } });
-    old.emit({ id: oldId, result: { wav: new ArrayBuffer(48) } });
+    old.emit({ id: oldId, result: { text: 'stale' } });
     const recovered = client.health();
     const workers = testState.workers.map((worker: any) => ({ name: worker.options.name, terminated: worker.terminated }));
     client.dispose();
     return { cancellation, stopped, recovered, workers };
   });
   expect(result.cancellation).toBe('AbortError');
-  expect(result.stopped.tts.status).toBe('unloaded');
-  expect(result.stopped.stt.status).toBe('ready');
+  expect(result.stopped.stt.status).toBe('unloaded');
   expect(result.workers[0].terminated).toBe(true);
   expect(result.workers[1].terminated).toBe(false);
-  expect(result.recovered.tts.status).toBe('ready');
-  expect(result.workers).toHaveLength(3);
+  expect(result.recovered.stt.status).toBe('ready');
+  expect(result.workers).toHaveLength(2);
 });
 
 test('failed initialization releases its partial worker and retries without a server fallback', async ({ page }) => {
@@ -112,18 +116,18 @@ test('failed initialization releases its partial worker and retries without a se
     const client = new DeviceAudioClient();
     const testState = (window as any).__audioTest;
     testState.failInit = true;
-    const message = await client.initialize('tts').then(() => '', (error: Error) => error.message);
+    const message = await client.initialize().then(() => '', (error: Error) => error.message);
     const failed = client.health();
     const terminated = testState.workers[0].terminated;
     testState.failInit = false;
-    await client.initialize('tts');
+    await client.initialize();
     const recovered = client.health();
     client.dispose();
     return { message, failed, terminated, recovered };
   });
   expect(result.message).toContain('startup failure');
-  expect(result.failed.tts.status).toBe('error');
+  expect(result.failed.stt.status).toBe('error');
   expect(result.terminated).toBe(true);
-  expect(result.recovered.tts.status).toBe('ready');
+  expect(result.recovered.stt.status).toBe('ready');
   expect(api).toEqual([]);
 });

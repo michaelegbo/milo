@@ -3,7 +3,7 @@ test.use({baseURL:process.env.MILO_DEVICE_TEST_URL || 'http://127.0.0.1:5175'});
 test.skip(!process.env.MILO_DEVICE_TEST_URL, 'Device browser suite');
 
 test('saved files survive reload, show reuse, and detect deletion without a downloaded flag', async ({page},testInfo)=>{
-  await page.route('**/api/voice/health', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'unconfigured'})}));
+  await page.route('**/api/voice/health', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'ready'})}));
   await page.goto('/');
   await page.evaluate(async()=>{
     const {AUDIO_FILES,audioFileUrl}=await import('/src/device/saved-downloads.ts' as string);
@@ -11,8 +11,11 @@ test('saved files survive reload, show reuse, and detect deletion without a down
     for(const {model,files} of Object.values(AUDIO_FILES) as any[]) for(const file of files) await cache.put(audioFileUrl(model,file),new Response('cached test data',{headers:{'Content-Length':'16'}}));
   });
   await page.reload();
-  await expect(page.getByRole('button',{name:/Start saved voice/})).toBeEnabled();
+  // Milo's voice is Deepgram, so the saved Kokoro files are listed only so they can be deleted.
+  await page.getByRole('tab',{name:'Conversation'}).click();
   await expect(page.locator('#device-saved-status')).toContainText('Listening: saved');
+  await expect(page.locator('#device-saved-status')).toContainText('Unused Kokoro voice: saved');
+  await expect(page.locator('#device-start')).toHaveText(/Download missing files/);
   await page.setViewportSize({width:390,height:844});
   await page.getByRole('tab',{name:'Setup',exact:true}).click();
   await page.locator('#device-setup').screenshot({path:testInfo.outputPath('saved-downloads-mobile.png')});
@@ -20,20 +23,22 @@ test('saved files survive reload, show reuse, and detect deletion without a down
   await page.setViewportSize({width:1440,height:1024});
   await page.evaluate(async()=>{
     const {AUDIO_FILES,audioFileUrl}=await import('/src/device/saved-downloads.ts' as string);
-    await(await caches.open('transformers-cache')).delete(audioFileUrl(AUDIO_FILES.tts.model,'config.json'));
+    await(await caches.open('transformers-cache')).delete(audioFileUrl(AUDIO_FILES.stt.model,'config.json'));
   });
   await page.getByRole('button',{name:'Check saved downloads'}).click();
-  await expect(page.getByRole('button',{name:/Download missing files/})).toBeEnabled();
-  await expect(page.locator('#device-saved-status')).toContainText('Voice: partly saved');
+  await expect(page.locator('#device-saved-status')).toContainText('Listening: partly saved');
+  await expect(page.locator('#device-start')).toHaveText(/Download missing files/);
   await page.getByRole('button',{name:'Delete downloaded models',exact:true}).click();
   await page.getByRole('button',{name:'Delete models',exact:true}).click();
-  await expect(page.locator('#device-saved-status')).toContainText('Voice: not saved');
+  await expect(page.locator('#device-saved-status')).toContainText('Listening: not saved');
+  await expect(page.locator('#device-saved-status')).not.toContainText('Kokoro');
   await page.reload();
-  await expect(page.getByRole('button',{name:/Download & start voice/})).toBeEnabled();
+  await page.getByRole('tab',{name:'Conversation'}).click();
+  await expect(page.getByRole('button',{name:/Download & start conversation/})).toBeEnabled();
 });
 
 test('real cache manager reuses complete Fast beside interrupted Quality and fetches only missing shards',async({page})=>{
-  await page.route('**/api/voice/health', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'unconfigured'})}));
+  await page.route('**/api/voice/health', route => route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({status:'ready'})}));
   await page.goto('/');
   let gets=0;
   await page.route('**/models/chat/*.gguf',route=>{

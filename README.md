@@ -1,6 +1,6 @@
 # Milo — a voice companion in 3D
 
-Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **Listening and replies run on your device by default.** Milo's spoken voice is synthesized by **Deepgram Flux** through Milo's own server, which holds the API key and streams audio back as it is made; when that service is unavailable, the on-device **Kokoro** voice takes over. Its cloud service otherwise delivers the website and downloadable model files. An optional **ChatGPT · My account** provider connects through Milo's hosted Codex app-server using OpenAI's device-code sign-in. Voice recordings and transcription remain on your device; only the text Milo is about to say is sent to Deepgram, and messages with conversation context pass through Milo to OpenAI only when you select that provider. Reply providers never switch automatically.
+Milo is an expressive Three.js robot that speaks your sentences and has voice or typed conversations. **Listening and replies run on your device by default.** Milo's spoken voice is synthesized by **Deepgram Flux** through Milo's own server, which holds the API key and streams audio back as it is made. Deepgram is the website's only voice: there is no on-device or browser speech fallback, so when Deepgram is unavailable Milo stays silent and says so. Its cloud service otherwise delivers the website and downloadable model files. An optional **ChatGPT · My account** provider connects through Milo's hosted Codex app-server using OpenAI's device-code sign-in. Voice recordings and transcription remain on your device; only the text Milo is about to say is sent to Deepgram, and messages with conversation context pass through Milo to OpenAI only when you select that provider. Reply providers never switch automatically.
 
 **Website:** [milo.seemplifyai.com](https://milo.seemplifyai.com) · **Source:** [michaelegbo/milo](https://github.com/michaelegbo/milo) · **License:** [PolyForm Noncommercial 1.0.0](LICENSE)
 
@@ -11,8 +11,8 @@ Milo is an expressive Three.js robot that speaks your sentences and has voice or
 ## Try Milo
 
 1. Open the website in a recent desktop browser. The avatar appears before any model download. On a phone the page is an app shell: the stage stays at the top, one screen shows at a time, and a Studio · Talk · Setup bar at the bottom switches between the sentence studio, the conversation, and downloads and settings.
-2. The sentence studio works immediately with the hosted voice, so nothing downloads for it. For conversation, choose the download option for listening and replies; Milo explains the size before starting. **Download voice** remains available for the on-device fallback voice.
-3. Pick a preset or type a sentence, choose Michael, Heart or Emma, and let Milo speak. The three presets are pre-rendered Kokoro clips that play instantly at normal pace; custom text and other paces are generated on your device sentence by sentence, so speech starts before the whole text is finished. Use pause, resume, stop or download the generated WAV.
+2. The sentence studio works immediately with the Deepgram voice, so nothing downloads for it. For conversation, choose the download option for listening and replies; Milo explains the size before starting.
+3. Pick a preset or type a sentence, choose Bruce, Sienna or Gemma, and let Milo speak. The three presets are pre-recorded Deepgram clips that play instantly; custom text streams from Deepgram sentence by sentence, so speech starts before the whole text is finished. Use pause, resume, stop or download the audio.
 4. Open **Conversation** and type a message. If Milo is not ready, the panel names the one thing needed next, such as loading saved models, downloading missing files, signing in to ChatGPT or retrying after an error, and offers that action in place. Microphone permission is requested only when you choose to listen or enable microphone selection.
 5. **Better answers** (Qwen 4B) is selected by default. Choose Fast on a laptop without a compatible GPU, or Hybrid to let Milo pick per reply. Saved models load on their own behind a short progress dialog; choosing a different model prepares it straight away, and only a first download on a fresh browser asks before starting.
 6. If the browser detects a compatible GPU, replies use it automatically and the switch shows **On**. Turn it off to reload the selected model on the device CPU; that choice is remembered in this browser. Unload the engines to release their live contexts.
@@ -49,18 +49,18 @@ See the [ChatGPT sign-in, privacy, troubleshooting and developer guide](docs/cha
 | Engine | Purpose | Approximate model download |
 | --- | --- | ---: |
 | Deepgram Flux (hosted) | Text-to-speech, three voices (Bruce, Sienna, Gemma), streamed through Milo's proxy | none |
-| Kokoro 82M ONNX, q8 | On-device text-to-speech fallback, three included voices | 92 MB |
+| Kokoro 82M ONNX, q8 | Local Node edition only; the website never loads it | 92 MB |
 | Whisper base.en ONNX, q8 | English speech-to-text | 80 MB |
 | Qwen2.5-1.5B-Instruct GGUF, Q4_K_M | Fast replies | 1.12 GB |
 | Qwen3-4B GGUF, Q4_K_M | Better answers and deeper Hybrid turns | 2.50 GB |
 
-The hosted voice needs no download. The on-device fallback voice needs Kokoro. Fast conversation adds Whisper and Qwen 1.5B, about **1.2 GB** in total with the hosted voice, or **1.3 GB** with Kokoro. Downloading every engine is about **3.8 GB**, plus browser runtime files and cache overhead. These decimal download sizes do not describe RAM requirements. More free storage can be required during preparation.
+The Deepgram voice needs no download. Fast conversation adds Whisper and Qwen 1.5B, about **1.2 GB** in total. Downloading every engine is about **3.7 GB**, plus browser runtime files and cache overhead. These decimal download sizes do not describe RAM requirements. More free storage can be required during preparation.
 
 Models are cached in the browser's storage for this website. Browsers may evict that cache, particularly in private browsing or when storage is low. Changing browser, profile or device requires separate downloads. An unloaded engine can reuse its cached model. Clearing site data removes these caches and saved interface preferences.
 
 Use **Delete downloaded models** in the setup panel to remove Milo's saved voice, listening and reply model files after confirmation. This stops playback and loaded engines, clears the model entries in Cache Storage and the browser's private filesystem, and keeps the current chat and preferences. Close other Milo tabs first; active tabs using the updated app protect their shared files until they are closed or their engines are unloaded. You can cancel before deletion or retry a failed deletion. Starting again prepares the models anew. **Free up memory** only unloads engines and keeps downloads. Browser-managed temporary HTTP cache and ordinary website assets are separate; use the browser's clear-site-data controls for a full site cleanup.
 
-Deepgram and Kokoro are TTS only. Whisper supplies STT, and Qwen supplies the replies. The same quantized GGUF weights are used for CPU and GPU; Hybrid adds no third language model.
+Deepgram is the website's text-to-speech; Kokoro is used only by the local Node edition. Whisper supplies STT, and Qwen supplies the replies. The same quantized GGUF weights are used for CPU and GPU; Hybrid adds no third language model.
 
 ## Fast, Better answers and Hybrid
 
@@ -124,12 +124,9 @@ flowchart LR
     UI -->|Text Milo says| Voice[Hosted voice proxy: same origin]
     Voice --> Deepgram[Deepgram Flux]
     Deepgram -->|Streamed PCM| Audio[Web Audio playback]
-    UI -.->|Fallback| Kokoro[Kokoro CPU worker]
-    Kokoro --> Audio
     Audio --> Avatar[Three.js face and gestures]
     Cache --> Whisper
     Cache --> Qwen
-    Cache --> Kokoro
   end
   UI -->|Only when ChatGPT selected: text and context| Codex[Hosted Codex: isolated browser session]
   Codex --> OpenAI[OpenAI: your ChatGPT account]
@@ -142,10 +139,10 @@ flowchart LR
 | `src/avatar.ts`, `src/materials.ts` | Procedural character and physical surface finishes |
 | `src/talking-motion.ts`, `src/avatar-expression.ts` | Bounded gestures and facial delivery |
 | `src/microphone.ts`, `src/speech.ts` | Capture lifecycle, streamed playback and sentence speech queue |
-| `src/voice-provider.ts` | Hosted voice detection, streaming requests and on-device fallback |
+| `src/voice-provider.ts` | Deepgram voice detection and streaming requests; no fallback voice |
 | `src/conversation.ts`, `src/conversation-memory.ts` | Chat controls, history and explicit facts |
 | `src/deployment.ts`, `src/transport.ts` | Build-time choice of browser or optional local Node transport |
-| `src/device/audio-client.ts`, `audio-worker.ts` | Kokoro/Whisper worker lifecycle, downloads and cancellation |
+| `src/device/audio-client.ts`, `audio-worker.ts` | Whisper worker lifecycle, downloads and cancellation |
 | `src/device/chat-client.ts`, `chat-worker.ts` | wllama inference, device selection, streaming and disposal |
 | `src/device/chat-policy.ts`, `chat-models.ts` | Hybrid routing and browser model locations |
 | `src/device/panel.ts`, `transport.ts` | Explicit device preparation and local request routing |
