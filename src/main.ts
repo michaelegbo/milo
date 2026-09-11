@@ -5,7 +5,7 @@ import './style.css';
 import { createAvatar, type AvatarPresence } from './avatar';
 import { SpeechPlayer, splitSpeechText } from './speech';
 import { presets, presetClipPath } from './presets';
-import { usesHostedVoice, voiceLabel } from './voice-provider';
+import { checkHostedVoice, usesHostedVoice, voiceLabel } from './voice-provider';
 import { createConversation } from './conversation';
 import { inferUtteranceMood } from './utterance-mood';
 
@@ -112,8 +112,8 @@ const devicePanel = isDeviceOnly ? createDevicePanel(el('device-setup'), () => {
 if (isDeviceOnly) {
   document.body.dataset.deployment = 'device';
   const note = document.querySelector<HTMLElement>('.about-note')!;
-  note.textContent = 'Milo’s voice is made by Deepgram from the text Milo says, streamed through Milo’s own server so no key reaches your browser; when that service is unavailable, the on-device Kokoro voice takes over. Listening and replies run on your device: models download only after you choose Download & start, and compatible browsers can accelerate replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through Milo’s hosted connection, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Reply providers never switch automatically.';
-  el('retry').textContent = 'Open model setup';
+  note.textContent = 'Milo’s voice is made by Deepgram from the text Milo says, streamed through Milo’s own server so no key reaches your browser. It is Milo’s only voice: if Deepgram is unavailable, Milo stays silent and says so. Listening and replies run on your device: models download only after you choose Download & start, and compatible browsers can accelerate replies with the GPU. Optional ChatGPT mode sends messages and conversation context to OpenAI through Milo’s hosted connection, using your account allowance. Recordings stay on your device. Models can be cached or deleted in setup. Chat history is held in this tab and clears on reload. Large local models may not fit on phones or tablets. Reply providers never switch automatically.';
+  el('retry').textContent = 'Check the voice again';
 }
 
 function renderSettings() {
@@ -131,7 +131,7 @@ function renderSettings() {
   el<HTMLSelectElement>('voice').value = settings.voice;
   // Deepgram voices have no pace control; the slider keeps applying to the on-device voice.
   el<HTMLInputElement>('speed').disabled = usesHostedVoice();
-  el<HTMLInputElement>('speed').title = usesHostedVoice() ? 'Pace applies to the on-device voice. The hosted voice speaks at its natural pace.' : '';
+  el<HTMLInputElement>('speed').title = usesHostedVoice() ? 'Deepgram’s voices speak at their natural pace.' : '';
   if (isDeviceOnly) el('local-label-text').textContent = usesHostedVoice() ? 'Voice by Deepgram · listening and replies on your device' : 'Voice on your device';
   el<HTMLInputElement>('speed').value = String(settings.speed);
   el('speed-value').textContent = `${settings.speed.toFixed(1)}×`;
@@ -159,7 +159,7 @@ function renderPlayback() {
   el('avatar-state').classList.toggle('is-speaking', speaking);
   document.querySelector('.audio-strip')?.classList.toggle('is-playing', speaking);
   let status = health === 'ready' ? 'All set. Press play and meet your voice.' : health === 'loading' ? 'Preparing the voice. The first download can take a few minutes.' : health === 'error' ? healthMessage : 'Connecting to the local voice…';
-  if (isDeviceOnly && health === 'unloaded') status = 'Choose Download & start voice above. Your words stay on this device.';
+  if (isDeviceOnly && health === 'loading') status = 'Checking Milo’s Deepgram voice…';
   if (presetAvailable) status = 'Press play to hear this sentence. No voice model download needed.';
   if (busy) status = presetAvailable ? 'Opening Milo’s voice…' : usesHostedVoice() ? 'Making your sentence…' : 'Making your sentence on the CPU. The first one can take a little longer.';
   if (speaking) status = 'Milo is speaking. The mouth moves with the sound.';
@@ -171,7 +171,7 @@ function renderPlayback() {
   el('retry').hidden = health !== 'error';
   el('track-title').textContent = busy ? 'A little voice in the making…' : player.hasAudio ? activeTitle : 'A voice waiting to happen';
   el('track-caption').textContent = player.hasAudio ? activeText : 'Your next little moment starts above.';
-  el('engine-label').textContent = usesHostedVoice() ? 'Deepgram voice · Ready' : `Kokoro voice · ${health === 'ready' ? isDeviceOnly ? 'Browser CPU ready' : 'CPU ready' : health === 'unloaded' ? 'Not loaded' : health === 'loading' ? 'Preparing' : health === 'error' ? 'Offline' : 'Connecting'}`;
+  el('engine-label').textContent = usesHostedVoice() ? `Deepgram voice · ${health === 'ready' ? 'Ready' : health === 'error' ? 'Unavailable' : 'Checking'}` : `Kokoro voice · ${health === 'ready' ? isDeviceOnly ? 'Browser CPU ready' : 'CPU ready' : health === 'unloaded' ? 'Not loaded' : health === 'loading' ? 'Preparing' : health === 'error' ? 'Offline' : 'Connecting'}`;
   el('engine-dot').className = `status-dot ${health === 'ready' ? '' : health === 'error' ? 'offline' : 'loading'}`;
 }
 player.onChange = () => { renderPlayback(); conversation?.onPlaybackChange(); };
@@ -285,7 +285,7 @@ async function checkHealth() {
   } catch { health = 'error'; healthMessage = isDeviceOnly ? 'The browser engine could not start. Use model setup above to try again. No words were sent to a server.' : 'The local voice is offline. Start the app with npm run dev, then reconnect.'; }
   finally { healthBusy = false; renderPlayback(); }
 }
-el('retry').addEventListener('click', () => { if (isDeviceOnly) { el('device-setup').scrollIntoView({ block: 'center' }); el('device-start').focus(); } else void checkHealth(); });
+el('retry').addEventListener('click', () => { if (isDeviceOnly) void checkHostedVoice(true).then(() => checkHealth()); else void checkHealth(); });
 if (isDeviceOnly) window.addEventListener('milo-device-change', () => void checkHealth());
 window.addEventListener('milo-voice-change', () => { renderSettings(); void checkHealth(); });
 const healthTimer = window.setInterval(() => void checkHealth(), 5000);

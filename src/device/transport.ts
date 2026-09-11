@@ -1,7 +1,7 @@
 import type { ChatMessage, ConversationMemory } from '../conversation-memory';
 import { clearStoredModels, holdModelStorage } from './model-storage';
 import { codexHealth, usesCodex } from '../reply-provider';
-import { checkHostedVoice, hostedVoiceStatus, usesHostedVoice } from '../voice-provider';
+import { checkHostedVoice, DEEPGRAM_UNAVAILABLE, hostedVoiceStatus } from '../voice-provider';
 import { deviceBudget } from './device-budget';
 
 export type DeviceProfile = 'fast' | 'quality' | 'hybrid';
@@ -10,7 +10,7 @@ type ChatClient = (typeof import('./chat-client'))['deviceChat'];
 let audio: AudioClient | undefined;
 let chat: ChatClient | undefined;
 let selectedProfile: DeviceProfile = deviceBudget().allows('quality') ? 'quality' : 'fast';
-let voiceConsent = false, conversationConsent = false;
+let conversationConsent = false;
 let initializingProfile: DeviceProfile | undefined;
 let releaseStorage: (() => Promise<void>) | undefined;
 let storageRequest: Promise<void> | undefined;
@@ -26,19 +26,16 @@ export function setDeviceProfile(profile: DeviceProfile) {
   window.dispatchEvent(new Event('milo-device-change'));
 }
 
-/** Whether Kokoro itself is loaded, regardless of the hosted voice. */
-export const deviceVoiceReady = () => voiceConsent && audio?.health().tts.status === 'ready';
-
 export function deviceHealth() {
-  const voices = audio?.health() ?? { tts: unloaded, stt: unloaded };
+  const stt = audio?.health().stt ?? unloaded;
   const mind = chat?.health();
   const approved = approvedProfiles.has(selectedProfile);
-  // The hosted voice needs no download: only the text Milo says leaves the device.
-  const tts = usesHostedVoice()
-    ? { ...voices.tts, status: 'ready', progress: 100, device: 'hosted', backend: 'deepgram', model: 'deepgram/flux', downloadBytes: 0, busy: false, hosted: true, message: 'Milo speaks with the hosted Deepgram voice. The on-device voice is optional.' }
-    : voices.tts;
+  // Milo's only voice is Deepgram. It needs no download; only the text Milo says leaves the device.
+  const voice = hostedVoiceStatus();
+  const tts = { status: voice === 'ready' ? 'ready' : voice === 'unknown' ? 'loading' : 'error', progress: voice === 'ready' ? 100 : null, device: 'hosted', backend: 'deepgram', model: 'deepgram/flux', downloadBytes: 0, busy: false, hosted: true,
+    message: voice === 'ready' ? 'Milo speaks with the Deepgram voice.' : voice === 'unknown' ? 'Checking Milo’s Deepgram voice…' : DEEPGRAM_UNAVAILABLE };
   return {
-    tts, stt: voices.stt,
+    tts, stt,
     chat: usesCodex() ? codexHealth(selectedProfile) : { ...unloaded, ...mind, status: initializingProfile ? 'loading' : !approved ? 'unloaded' : mind?.status ?? 'unloaded',
       profile: selectedProfile, acceleration: mind?.acceleration ?? acceleration, residency: 'single',
       residencyReason: 'One reply model stays in memory. Hybrid loads the selected model when a turn needs it.' },
@@ -70,17 +67,16 @@ export async function initializeDevice(conversation: boolean, signal: AbortSigna
   if (conversation) initializingProfile = profile;
   window.dispatchEvent(new Event('milo-device-change'));
   try {
-  audio ??= (await import('./audio-client')).deviceAudio;
-  signal.throwIfAborted();
-  voiceConsent = true;
   if (!conversation) {
-    await audio.initialize('tts', { signal });
+    // The studio has nothing to load: its only voice is Deepgram. Starting it just checks that Deepgram answers.
+    if ((await checkHostedVoice(true)) !== 'ready') throw new Error(DEEPGRAM_UNAVAILABLE);
   } else {
+    audio ??= (await import('./audio-client')).deviceAudio;
     if (!usesCodex()) chat ??= (await import('./chat-client')).deviceChat;
     signal.throwIfAborted();
     conversationConsent = true; approvedProfiles.add(profile);
-    // With the hosted voice active, conversation needs only listening on the device.
-    await audio.initialize(usesHostedVoice() ? 'stt' : 'both', { signal });
+    // Conversation loads listening, and replies unless ChatGPT provides them. Speech is always Deepgram.
+    await audio.initialize('stt', { signal });
     signal.throwIfAborted();
     if (!usesCodex()) await chat!.initialize({ profile, signal });
   }
@@ -97,7 +93,7 @@ export function unloadDevice() {
   return unloadOperation ??= (async () => {
   const pending = storageRequest;
   storageController.abort(); storageController = new AbortController();
-  voiceConsent = false; conversationConsent = false; approvedProfiles.clear();
+  conversationConsent = false; approvedProfiles.clear();
   initializingProfile = undefined;
   await Promise.allSettled([audio?.dispose(), chat?.dispose()]);
   await pending?.catch(() => {});
@@ -139,11 +135,8 @@ export async function deviceRequest(path: string, init: RequestInit = {}): Promi
     finally { window.dispatchEvent(new Event('milo-device-change')); }
     return json(deviceHealth());
   }
-  if (route === '/api/speech') {
-    if (!voiceConsent || !audio) return consentError();
-    const result = await audio.generate(body, { signal });
-    return new Response(result.wav, { headers: { 'Content-Type': 'audio/wav' } });
-  }
+  // Speech never runs on the device: it is Deepgram or nothing (see ../transport.ts).
+  if (route === '/api/speech') return json({ message: DEEPGRAM_UNAVAILABLE }, 503);
   if (route === '/api/transcribe') {
     if (!conversationConsent || !audio) return consentError();
     if (!(body instanceof Blob)) return json({ message: 'A recorded voice message is required.' }, 400);

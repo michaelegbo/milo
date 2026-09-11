@@ -22,7 +22,7 @@ This flow works through desktop and mobile browsers. Browser memory and cross-or
 The model menu comes from your signed-in account, not a hard-coded list. Account limits and model availability apply.
 Fast uses lighter supported reasoning effort; Better answers uses deeper effort. Hybrid chooses effort from the message and recent context.
 The model you selected stays selected across modes. Milo sends bounded recent messages and its in-tab memory for each temporary turn.
-Replies stream back and are spoken with local Kokoro. GPU acceleration affects the device Qwen provider; OpenAI manages ChatGPT inference.
+Replies stream back and are spoken with Milo's Deepgram voice. GPU acceleration affects the device Qwen provider; OpenAI manages ChatGPT inference.
 No browser, file, shell, coding or external-action tools are available to the model through this integration.
 
 ## Privacy and lifetime

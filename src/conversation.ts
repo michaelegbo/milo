@@ -1,7 +1,7 @@
 import { apiFetch } from './transport';
 import { isDeviceOnly } from './deployment';
 import { codexRequest, codexStatus, updateCodexStatus, usesCodex } from './reply-provider';
-import { usesHostedVoice, voiceLabel } from './voice-provider';
+import { checkHostedVoice, usesHostedVoice, voiceLabel } from './voice-provider';
 import { deviceBudget } from './device/device-budget';
 import { createCodexPanel } from './codex-panel';
 import { MicrophoneRecorder } from './microphone';
@@ -165,7 +165,7 @@ export function createConversation(options: {
     const preparing = !!device?.preparing;
     const refused = device && !remote && !budget.allows(profile);
     const settled = !!health && health.chat.profile === profile && !refused;
-    // With ChatGPT replies the device still holds listening (and the fallback voice); load those saved files too, once signed in.
+    // With ChatGPT replies the device still holds listening; load those saved files too, once signed in.
     const canAutoLoad = !remote || !!codexStatus()?.signedIn;
     if (device && canAutoLoad && visible && settled && !preparing && !loading && !failed && !healthError && device.supported && unloaded && !autoLoading && (switchRequested || (device.saved === 'all' && !autoLoadDeclined))) {
       // Saved files load without a click. A first download still waits for consent unless the visitor just chose a model.
@@ -179,6 +179,7 @@ export function createConversation(options: {
     else if (healthError) step = { text: healthError, action: 'Try loading again', run: retry, busy: device?.busy };
     else if (!health) step = undefined;
     else if (device && !device.supported) step = { text: device.capability };
+    else if (usesHostedVoice() && health.tts.status === 'error') step = { text: health.tts.message || 'Milo’s Deepgram voice is not available right now, so Milo cannot speak.', action: 'Check again', run: () => void checkHostedVoice(true) };
     else if (failed) step = { text: `${failed.message || 'Milo could not load on this device.'} Close other busy tabs, then try again.`, action: 'Try loading again', run: retry, busy: device?.busy };
     else if (remote && health.chat.status !== 'ready') {
       const codex = codexStatus();

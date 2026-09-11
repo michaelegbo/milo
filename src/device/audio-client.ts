@@ -1,21 +1,19 @@
-export type AudioKind = 'tts' | 'stt';
+/** The device only listens. Milo's voice is Deepgram, so there is no speech engine here. */
+export type AudioKind = 'stt';
 export type AudioHealth = {
   status: 'unloaded' | 'loading' | 'ready' | 'error'; progress: number | null;
   message: string; model: string; device: 'cpu'; backend: 'wasm'; offline: boolean;
   busy: boolean; downloadBytes: number;
 };
-export type AudioHealthSnapshot = { tts: AudioHealth; stt: AudioHealth };
-export type SpeechRequest = { text: string; voice?: string; speed?: number };
-export type SpeechResult = { wav: Blob; duration: number; generationMs: number; cached: boolean };
+export type AudioHealthSnapshot = { stt: AudioHealth };
 export type TranscriptionResult = { text: string; duration: number; transcriptionMs: number };
 type Options = { signal?: AbortSignal };
 type WorkerReply = { id?: number; health?: Partial<AudioHealth>; result?: unknown; error?: string };
 
 const MODELS = {
-  tts: { model: 'onnx-community/Kokoro-82M-v1.0-ONNX', downloadBytes: 92_000_000 },
   stt: { model: 'Xenova/whisper-base.en', downloadBytes: 80_000_000 },
 };
-const initialHealth = (kind: AudioKind): AudioHealth => ({ ...MODELS[kind], status: 'unloaded', progress: null, message: `${kind === 'tts' ? 'Voice' : 'Listening'} has not been downloaded on this device.`, device: 'cpu', backend: 'wasm', offline: false, busy: false });
+const initialHealth = (kind: AudioKind): AudioHealth => ({ ...MODELS[kind], status: 'unloaded', progress: null, message: 'Listening has not been downloaded on this device.', device: 'cpu', backend: 'wasm', offline: false, busy: false });
 const cancelled = () => new DOMException('The device operation was cancelled.', 'AbortError');
 
 class AudioChannel {
@@ -29,7 +27,7 @@ class AudioChannel {
 
   private start() {
     if (this.worker) return;
-    if (!globalThis.isSecureContext || typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') throw new Error('Device voice needs a secure browser with WebAssembly and Web Workers. Try a recent desktop browser.');
+    if (!globalThis.isSecureContext || typeof Worker === 'undefined' || typeof WebAssembly === 'undefined') throw new Error('Device listening needs a secure browser with WebAssembly and Web Workers. Try a recent desktop browser.');
     const worker = new Worker(new URL('./audio-worker.ts', import.meta.url), { type: 'module', name: `milo-${this.kind}` });
     this.worker = worker;
     worker.onmessage = ({ data }: MessageEvent<WorkerReply>) => {
@@ -113,33 +111,23 @@ class AudioChannel {
 export class DeviceAudioClient {
   private listeners = new Set<(health: AudioHealthSnapshot) => void>();
   private channels = {
-    tts: new AudioChannel('tts', () => this.notify()),
     stt: new AudioChannel('stt', () => this.notify()),
   };
-  health(): AudioHealthSnapshot { return { tts: { ...this.channels.tts.state }, stt: { ...this.channels.stt.state } }; }
+  health(): AudioHealthSnapshot { return { stt: { ...this.channels.stt.state } }; }
   subscribe(listener: (health: AudioHealthSnapshot) => void) {
     this.listeners.add(listener); listener(this.health());
     return () => this.listeners.delete(listener);
   }
   private notify() { for (const listener of this.listeners) listener(this.health()); }
-  async initialize(kind: AudioKind | 'both' = 'both', options: Options = {}) {
-    // Sequential initialization avoids simultaneous large model allocations.
-    for (const item of kind === 'both' ? ['tts', 'stt'] as const : [kind]) await this.channels[item].initialize(options);
-  }
-  async generate(request: SpeechRequest, options: Options = {}): Promise<SpeechResult> {
-    if (!request || typeof request.text !== 'string' || !request.text.trim() || request.text.length > 600) throw new Error('Enter a sentence of 1 to 600 characters.');
-    if (!['af_heart', 'am_michael', 'bf_emma'].includes(request.voice ?? 'af_heart') || (request.speed != null && (!Number.isFinite(request.speed) || request.speed < 0.7 || request.speed > 1.3))) throw new Error('Choose a supported voice and speed between 0.7 and 1.3.');
-    const result = await this.channels.tts.perform<Omit<SpeechResult, 'wav'> & { wav: ArrayBuffer }>('generate', { request }, options);
-    return { ...result, wav: new Blob([result.wav], { type: 'audio/wav' }) };
+  async initialize(kind: AudioKind = 'stt', options: Options = {}) {
+    await this.channels[kind].initialize(options);
   }
   async transcribe(wav: Blob | ArrayBuffer, options: Options = {}): Promise<TranscriptionResult> {
     if ((wav instanceof Blob ? wav.size : wav.byteLength) > 1_000_000) throw new Error('Keep voice messages under 30 seconds.');
     const bytes = wav instanceof Blob ? await wav.arrayBuffer() : wav;
     return this.channels.stt.perform<TranscriptionResult>('transcribe', { wav: bytes }, options);
   }
-  dispose(kind?: AudioKind) {
-    for (const item of kind ? [kind] : ['tts', 'stt'] as const) this.channels[item].dispose();
-  }
+  dispose() { this.channels.stt.dispose(); }
 }
 
 export const deviceAudio = new DeviceAudioClient();
