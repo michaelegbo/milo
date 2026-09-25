@@ -1,0 +1,222 @@
+# Blocks PolinRider / "A8-5069-6" malware (and look-alikes) from being merged.
+# pull_request_target runs THIS file from the protected base branch, so a PR
+# cannot disable the scan. PR files are only read as text - never executed.
+name: polinrider-scan
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: read
+jobs:
+  polinrider-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out PR files (read-only, no credentials kept)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Scan for malware indicators
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > "$RUNNER_TEMP/polinrider_scan.py" <<'PYEOF'
+          #!/usr/bin/env python3
+          """Scan pull-request files for the PolinRider / "A8-5069-6" supply-chain worm.
+          
+          Files are only ever read as text; nothing from the pull request is executed.
+          
+          Modes:
+            polinrider_scan.py --pr            inside GitHub Actions (reads the PR via the API)
+            polinrider_scan.py FILE [FILE...]  local scan of specific files
+          """
+          import datetime
+          import json
+          import os
+          import re
+          import sys
+          import urllib.request
+          
+          IOC_STRINGS = [
+              "A8-5069-6",
+              "NONCE_FANOUT",
+              "global['_V']",
+              "global.i = '",
+              "__inzCR",
+              ".inz.cjs",
+              "166.88.134.75",
+              "194.11.226.41",
+              "150.251.113.223",
+              "app-cursor-eval",
+          ]
+          HIDDEN_CODE = re.compile(r"[ \t]{150,}\S")
+          HEX_ESCAPE = re.compile(r"\\x[0-9a-fA-F]{2}")
+          DANGEROUS_IN_CONFIG = re.compile(
+              r"child_process|\beval\s*\(|\bFunction\s*\(|fromCharCode|\batob\s*\(|require\(\s*['\"](https?|net|dgram)['\"]\s*\)"
+          )
+          CODE_EXT = (
+              ".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx", ".json", ".py",
+              ".sh", ".ps1", ".vbs", ".bat", ".cmd", ".rb", ".php", ".vue", ".svelte",
+          )
+          SKIP_SUFFIX = (".min.js", ".min.mjs", ".map", "package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+          SKIP_DIRS = ("node_modules/", "dist/", "build/", ".next/", "coverage/", "vendor/")
+          # Build-tool configs that dev servers, linters and bundlers execute on load
+          # (postcss.config.js, eslint.config.mjs, next.config.ts, .eslintrc.cjs ...).
+          CONFIG_NAME = re.compile(
+              r"(^|/)([\w-]+\.config\.(c|m)?[jt]s|\.(eslintrc|babelrc|prettierrc|stylelintrc|lintstagedrc)\.c?js)$",
+              re.IGNORECASE,
+          )
+          LIFECYCLE = ("preinstall", "install", "postinstall", "prepare", "prepublish")
+          MAX_BYTES = 5 * 1024 * 1024
+          
+          
+          def scan_text(path, text):
+              """Return a list of (severity, line, message) for one file."""
+              findings = []
+              norm = path.replace("\\", "/")
+              low = norm.lower()
+              if any(d in "/" + low for d in ("/" + s for s in SKIP_DIRS)) or low.endswith(SKIP_SUFFIX):
+                  return findings
+              is_code = low.endswith(CODE_EXT) or low.endswith("tasks.json")
+              is_config = bool(CONFIG_NAME.search(norm))
+          
+              if low.endswith(".inz.cjs") or low.endswith(".inz.orig"):
+                  findings.append(("error", 1, "File name matches the PolinRider editor-trojan implant"))
+          
+              lines = text.split("\n")
+              hex_total = 0
+              for n, line in enumerate(lines, 1):
+                  for ioc in IOC_STRINGS:
+                      if ioc in line:
+                          findings.append(("error", n, f"Known PolinRider indicator: {ioc!r}"))
+                  if is_code and HIDDEN_CODE.search(line):
+                      findings.append(("error", n, "Code hidden after a long run of whitespace (pushed off-screen)"))
+                  if is_code:
+                      hex_total += len(HEX_ESCAPE.findall(line))
+                      if len(line) > 3000:
+                          # Minified vendor bundles legitimately have huge lines with eval
+                          # and escapes, so outside build-tool configs this is only a hint.
+                          if is_config:
+                              findings.append(("error", n, f"Very long obfuscated-looking line in a build config ({len(line)} chars)"))
+                          elif not low.endswith(".json"):
+                              findings.append(("warning", n, f"Very long line ({len(line)} chars) - check it is generated or vendored code"))
+          
+              if is_config:
+                  m = DANGEROUS_IN_CONFIG.search(text)
+                  if m:
+                      line_no = text[: m.start()].count("\n") + 1
+                      findings.append(("error", line_no, f"Config file uses {m.group(0)!r} - configs should not spawn processes or eval code"))
+                  if len(text.encode("utf-8", "ignore")) > 10000:
+                      findings.append(("error", 1, f"Config file is unusually large ({len(text)} bytes)"))
+              if is_code and hex_total > 300:
+                  sev = "error" if is_config else "warning"
+                  findings.append((sev, 1, f"Heavy hex-escape obfuscation ({hex_total} \\xNN sequences)"))
+          
+              if low.endswith(".vscode/tasks.json") and re.search(r'"runOn"\s*:\s*"folderOpen"', text):
+                  findings.append(("error", 1, "VS Code task set to run automatically when the folder is opened"))
+              if low.endswith("package.json"):
+                  try:
+                      scripts = (json.loads(text) or {}).get("scripts", {}) or {}
+                      for name in LIFECYCLE:
+                          if name in scripts:
+                              findings.append(("warning", 1, f"Install lifecycle script {name!r}: {str(scripts[name])[:120]}"))
+                  except ValueError:
+                      pass
+              return findings
+          
+          
+          def check_commits(commits):
+              """Flag the worm's forged-commit tell: committer date well before author date."""
+              findings = []
+              for c in commits:
+                  info = c.get("commit", {})
+                  a, k = info.get("author") or {}, info.get("committer") or {}
+                  try:
+                      ad = datetime.datetime.fromisoformat(a["date"].replace("Z", "+00:00"))
+                      cd = datetime.datetime.fromisoformat(k["date"].replace("Z", "+00:00"))
+                  except (KeyError, ValueError):
+                      continue
+                  sha = c.get("sha", "")[:8]
+                  if (ad - cd).total_seconds() > 3600:
+                      findings.append(("error", sha, f"Commit {sha}: committed {ad - cd} BEFORE it was authored - forged-commit signature"))
+                  elif a.get("name") and k.get("name") and a["name"] != k["name"] and k["name"] != "GitHub":
+                      if a["name"].split()[0] == k["name"]:
+                          findings.append(("warning", sha, f"Commit {sha}: author {a['name']!r} vs committer {k['name']!r} (first-name-only committer is a PolinRider pattern)"))
+              return findings
+          
+          
+          def api(url, token):
+              req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+              with urllib.request.urlopen(req, timeout=30) as r:
+                  return json.loads(r.read())
+          
+          
+          def paged(url, token):
+              out, page = [], 1
+              while True:
+                  batch = api(f"{url}{'&' if '?' in url else '?'}per_page=100&page={page}", token)
+                  out += batch
+                  if len(batch) < 100:
+                      return out
+                  page += 1
+          
+          
+          def read_file(path):
+              try:
+                  if os.path.getsize(path) > MAX_BYTES:
+                      return None
+                  with open(path, "rb") as f:
+                      data = f.read()
+                  if b"\0" in data[:8000]:
+                      return None
+                  return data.decode("utf-8", "replace")
+              except OSError:
+                  return None
+          
+          
+          def main(argv):
+              results = []
+              if argv[:1] == ["--pr"]:
+                  event = json.load(open(os.environ["GITHUB_EVENT_PATH"]))
+                  token, repo = os.environ["GITHUB_TOKEN"], os.environ["GITHUB_REPOSITORY"]
+                  number = event["pull_request"]["number"]
+                  base = f"https://api.github.com/repos/{repo}/pulls/{number}"
+                  files = [f["filename"] for f in paged(f"{base}/files", token) if f.get("status") != "removed"]
+                  for path in files:
+                      text = read_file(path)
+                      if text is not None:
+                          results += [(path, *f) for f in scan_text(path, text)]
+                  results += [("(commits)", *f) for f in check_commits(paged(f"{base}/commits", token))]
+              else:
+                  for path in argv:
+                      text = read_file(path)
+                      if text is not None:
+                          results += [(path, *f) for f in scan_text(path, text)]
+          
+              errors = [r for r in results if r[1] == "error"]
+              for path, sev, line, msg in results:
+                  if os.environ.get("GITHUB_ACTIONS"):
+                      loc = f"file={path},line={line}" if isinstance(line, int) else ""
+                      print(f"::{sev} {loc}::{msg}")
+                  else:
+                      print(f"{sev.upper():7} {path}:{line}  {msg}")
+              summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if summary:
+                  with open(summary, "a") as s:
+                      s.write("## PolinRider malware scan\n\n")
+                      if not results:
+                          s.write("No indicators found.\n")
+                      for path, sev, line, msg in results:
+                          s.write(f"- **{sev}** `{path}`:{line} - {msg}\n")
+              print(f"\n{len(errors)} error(s), {len(results) - len(errors)} warning(s)")
+              return 1 if errors else 0
+          
+          
+          if __name__ == "__main__":
+              sys.exit(main(sys.argv[1:]))
+          PYEOF
+          python3 "$RUNNER_TEMP/polinrider_scan.py" --pr
