@@ -195,25 +195,23 @@ build, and runs the browser suites that need no model weights. The suites that
 drive real Kokoro, Whisper or Qwen weights are not run there; keep running them
 locally before a release, as described below.
 
-When main is green, the `deploy` job redeploys the public site. It needs one
-repository secret, `DOKPLOY_DEPLOY_WEBHOOK`, holding the webhook URL of the
-Dokploy `milo` service (Settings -> Secrets and variables -> Actions). Without
-that secret the job warns and does nothing, so pushes stay green until it is
-configured. Treat the URL as a credential: anyone holding it can trigger a
-deploy, and the workflow never prints it or the response body. Enable Autodeploy
-on the Dokploy service, keep its Git branch set to `main`, and let this workflow
-call the webhook after verification. The request includes GitHub's push header
-and event payload so Dokploy can validate the branch. An empty POST is rejected
-as `Branch Not Match`. A separate repository push webhook is unnecessary and
-would bypass the CI gate.
+After `main` passes QA, pushes and manual runs deploy through a restricted SSH
+key to Seemplify KVM4, `191.215.40.99`. Configure repository secrets
+`MILO_DEPLOY_SSH_KEY` and `MILO_DEPLOY_KNOWN_HOSTS`, and repository variable
+`HOSTINGER_SSH_HOST`. Missing configuration fails delivery. The key has no shell,
+file-upload, PTY or port-forwarding access: its forced command accepts only
+`deploy <40-character commit SHA>` and checks that SHA against canonical `main`.
+The host command is `deploy/hostinger/milo-github-deploy.py`, installed as
+`/usr/local/sbin/milo-github-deploy.py` and protected by root ownership.
 
-The job then waits up to fifteen minutes for the site to serve the exact bundle
-filename that this commit produced. Vite names bundles by content, so that check
-confirms the deployed code rather than a status string, and a stale build fails
-the job while the previous version keeps serving. `MILO_BUILD_REVISION` still
-comes from the Dokploy environment, so update it there when you want
-`release.json` to report the commit; the job reports a mismatch as a note rather
-than a failure.
+Dokploy continues to own the three-service deployment. The forced command holds
+the shared Seemplify deployment lock, preserves existing environment values,
+updates `MILO_BUILD_REVISION` to the tested commit and starts the existing Compose
+service through the local Dokploy API. The API credential stays in a root-only
+file on the host and is never given to GitHub. Models and account volumes stay
+in place. Delivery requires all three services healthy at that exact revision,
+then verifies public `release.json` and the content-hashed frontend bundle.
+The previous trigger-only webhook secret is no longer used.
 
 Deploys are serialized through one concurrency group, and the job is attached to
 the `production` environment, so required reviewers can be added there when a
